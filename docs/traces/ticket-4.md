@@ -26,8 +26,11 @@ All entries below are real. Ticket and PR comments are on GitHub
 | 16:2x | build | builder · gpt-oss:120b | 3 | commit `8a0603d`: any exception recorded, function returns | 14 | 10,372 / 4,516 / 185,656 |
 | 16:2x | review | reviewer · nemotron-3-super | 3 | approve `8a0603d` | 2 | 7,891 / 3,721 / 12,013 |
 | 16:2x | test | tester · gpt-oss:120b | 3 | **pass** `8a0603d`: 9 passed, tests unchanged from the failing run | 13 | 7,994 / 3,372 / 127,254 |
+| later | publish-tests | harness (no model) | – | commit `befdf13`: tester's file copied verbatim to `app/tests/acceptance/test_ticket_4.py` | – | 0 |
+| later | verify | harness (no model) | – | **pass** `befdf13`: 9 passed from committed files | – | 0 |
+| later | review | reviewer · nemotron-3-super | 3 | approve `befdf13` (saw code, committed tests, pytest output) | 2 | 11,813 / 2,013 / 14,321 |
 
-Runtime totals: 1,501,072 tokens for this ticket (all attempts). For OpenClaw runs the runtime total
+Runtime totals: 1,515,393 tokens for this ticket (all attempts). For OpenClaw runs the runtime total
 is much larger than input + output; it appears to count the full prompt (system prompt +
 tool schemas, ~7–11K tokens) again on every turn. This is an interpretation, not confirmed
 by OpenClaw documentation; `openclaw gateway usage-cost` returned zeros for this profile.
@@ -66,7 +69,8 @@ by OpenClaw documentation; `openclaw gateway usage-cost` returned zeros for this
 
 ## State after attempt 3
 
-- PR #9 head `8a0603d`: `agent/review` success, `agent/test` success (pytest 9 passed).
+- PR #9 head `befdf13` (adds the tester's acceptance tests to the repo; no code change):
+  `agent/review` success, `agent/test` success (pytest 9 passed from committed files).
 - Ticket #4: `status:ready-for-merge`, awaiting human review and merge. Builder attempts: 3 of 3.
 - Known minor gap: the CLI (`python -m newsroom.refresh`) now exits 0 even when a refresh
   fails; a nonzero CLI exit code was optional for this ticket.
