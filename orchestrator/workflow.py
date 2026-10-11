@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 from . import config, ledger, runtimes, workspace
@@ -227,7 +228,7 @@ class Orchestrator:
         for t in candidates:
             if self._status(t) != "status:changes-requested":
                 continue
-            pr = self.gh.find_pr("dispatch", self._branch(t["number"]))
+            pr = self.gh.find_pr("dispatch", self._branch(t["number"]), open_only=True)
             if pr:
                 rejects = [e for e in self.gh.events("dispatch", pr["number"]) if e.get("outcome") in ("request_changes", "fail")]
                 notes = self._latest_rejection_text(pr["number"])
@@ -235,11 +236,11 @@ class Orchestrator:
         return "\n\n".join(parts)
 
     def _latest_rejection_text(self, pr_number: int) -> str:
-        comments = self.gh.get_issue("dispatch", pr_number).get("comments", [])
-        for c in reversed(comments):
-            body = c.get("body", "")
-            if '"outcome": "request_changes"' in body or '"outcome": "fail"' in body:
-                return body.split("<!-- newsroom-event")[0].strip()[:4000]
+        # Only the team's own comments, identified by their trailing event marker. Text from
+        # other accounts never reaches the builder (it would be a prompt-injection channel).
+        for c in reversed(self.gh.team_comments("dispatch", pr_number)):
+            if (c["event"] or {}).get("outcome") in ("request_changes", "fail"):
+                return c["body"][:4000]
         return ""
 
     # -- build ------------------------------------------------------------------------------
@@ -256,12 +257,12 @@ class Orchestrator:
         ws = config.WORK_DIR / "builder"
         workspace.export_tree(repo, ws / "repo")
         feedback = ""
-        pr = self.gh.find_pr("builder", branch)
+        pr = self.gh.find_pr("builder", branch, open_only=True)
         if attempt > 1 and pr:
             feedback = self._latest_rejection_text(pr["number"])
         instructions = self._latest_assign_instructions(ticket)
-        (ws / "TICKET.md").write_text(render_ticket(issue, instructions, feedback, attempt))
-        shutil.copyfile(config.BRIEF_FILE, ws / "BRIEF.md")
+        workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
+        workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
         reply = runtimes.run_openclaw(
             self.team.agent("builder")["agent_id"],
@@ -326,12 +327,18 @@ class Orchestrator:
     # -- review -----------------------------------------------------------------------------
     def review(self, ticket: int) -> str:
         issue = self.gh.get_issue("reviewer", ticket)
-        pr = self.gh.find_pr("reviewer", self._branch(ticket))
+        pr = self.gh.find_pr("reviewer", self._branch(ticket), open_only=True)
         if pr is None:
-            raise RuntimeError(f"no PR for ticket {ticket}")
+            raise RuntimeError(f"no open team PR for ticket {ticket}")
         sha = pr["headRefOid"]
         attempt = self._attempts(ticket)
-        diff = self.gh.pr_diff("reviewer", pr["number"])
+        # The diff is computed locally from the exact commit the status will be attached to, so a
+        # push between "read diff" and "post status" cannot get an unreviewed commit approved.
+        repo = workspace.harness_clone(self.team, "reviewer", "reviewer")
+        workspace.checkout(repo, f"review/{ticket}", f"origin/{self._branch(ticket)}")
+        if workspace.git(repo, "rev-parse", "HEAD").strip() != sha:
+            raise RuntimeError(f"PR head moved while preparing review of #{ticket}; retry")
+        diff = workspace.git(repo, "diff", f"origin/{self.team.base_branch}...{sha}")
         if len(diff) > MAX_DIFF_CHARS:
             diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated by harness]"
         prompt = REVIEW_PROMPT.format(pr=pr["number"], ticket=ticket, title=issue["title"], body=issue["body"],
@@ -368,9 +375,9 @@ class Orchestrator:
     # -- test -------------------------------------------------------------------------------
     def test(self, ticket: int) -> str:
         issue = self.gh.get_issue("tester", ticket)
-        pr = self.gh.find_pr("tester", self._branch(ticket))
+        pr = self.gh.find_pr("tester", self._branch(ticket), open_only=True)
         if pr is None:
-            raise RuntimeError(f"no PR for ticket {ticket}")
+            raise RuntimeError(f"no open team PR for ticket {ticket}")
         sha = pr["headRefOid"]
         attempt = self._attempts(ticket)
         repo = workspace.harness_clone(self.team, "tester", "tester")
@@ -382,16 +389,18 @@ class Orchestrator:
         ws = config.WORK_DIR / "tester"
         workspace.export_tree(repo, ws / "repo")
         acc = ws / "acceptance"
+        if acc.is_symlink():
+            acc.unlink()
         shutil.rmtree(acc, ignore_errors=True)
         acc.mkdir(parents=True)
-        (ws / "TICKET.md").write_text(render_ticket(issue, [], "", attempt))
-        shutil.copyfile(config.BRIEF_FILE, ws / "BRIEF.md")
+        workspace.safe_write(ws / "TICKET.md", render_ticket(issue, [], "", attempt))
+        workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
         reply = runtimes.run_openclaw(self.team.agent("tester")["agent_id"],
                                       TEST_MESSAGE.format(pr=pr["number"], ticket=ticket),
                                       session=f"ticket-{ticket}-test-{attempt}")
-        test_file = acc / "test_acceptance.py"
-        if not reply.ok or not test_file.is_file() or test_file.is_symlink():
+        test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
+        if not reply.ok or test_bytes is None:
             reason = reply.error or "tester wrote no acceptance/test_acceptance.py"
             self.gh.set_commit_status("tester", sha, "agent/test", "error", f"tester: {reason}"[:140])
             self._record(Event(event="test", agent="tester", runtime="openclaw", ticket=ticket, pr=pr["number"],
@@ -402,7 +411,8 @@ class Orchestrator:
             self.escalate(ticket, "tester failed to produce acceptance tests")
             return "tester-error"
 
-        rc, output = run_tests_offline(repo, test_file)
+        test_source = test_bytes.decode("utf-8", errors="replace")
+        rc, output = run_tests_offline(repo, test_source)
         passed = rc == 0
         self.gh.set_commit_status("tester", sha, "agent/test", "success" if passed else "failure",
                                   f"tester: pytest exit {rc}")
@@ -412,7 +422,7 @@ class Orchestrator:
             f"(pytest exit {rc}, offline container, builder tests + independent acceptance tests).\n\n"
             f"<details><summary>pytest output (tail)</summary>\n\n```\n{output[-6000:]}\n```\n</details>\n\n"
             f"<details><summary>acceptance/test_acceptance.py (written by tester)</summary>\n\n```python\n"
-            f"{test_file.read_text()[:12000]}\n```\n</details>"
+            f"{test_source[:12000]}\n```\n</details>"
         )
         self.gh.set_status_label("tester", ticket, "status:ready-for-merge" if passed else "status:changes-requested")
         self._record(
@@ -494,17 +504,18 @@ def render_ticket(issue: dict, instructions: list[str], feedback: str, attempt: 
     return "\n".join(parts) + "\n"
 
 
-def run_tests_offline(repo: Path, acceptance_file: Path) -> tuple[int, str]:
+def run_tests_offline(repo: Path, acceptance_source: str) -> tuple[int, str]:
     """Run builder tests + tester acceptance tests in a locked-down container (no network, no secrets)."""
     with tempfile.TemporaryDirectory(prefix="newsroom-test-") as tmp:
         src = Path(tmp) / "work"
-        shutil.copytree(repo, src, ignore=shutil.ignore_patterns(".git"))
+        workspace.copy_tree_no_links(repo, src)
         acc = Path(tmp) / "acceptance"
         acc.mkdir()
-        shutil.copyfile(acceptance_file, acc / "test_acceptance.py")
+        (acc / "test_acceptance.py").write_text(acceptance_source)
         targets = ["/acceptance"] + (["tests"] if (src / "app" / "tests").is_dir() else [])
+        name = f"newsroom-test-{uuid.uuid4().hex[:10]}"
         cmd = [
-            "docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
+            "docker", "run", "--rm", "--name", name, "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
             "--memory", "1g", "--cpus", "1", "--user", "1000:1000",
             "-v", f"{src}:/work:ro", "-v", f"{acc}:/acceptance:ro", "-w", "/work/app",
@@ -513,7 +524,8 @@ def run_tests_offline(repo: Path, acceptance_file: Path) -> tuple[int, str]:
             *targets,
         ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TEST_TIMEOUT_S)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TEST_TIMEOUT_S, env=config.base_env())
         except subprocess.TimeoutExpired:
+            subprocess.run(["docker", "kill", name], capture_output=True, env=config.base_env())
             return 124, f"tests exceeded {TEST_TIMEOUT_S}s"
         return proc.returncode, (proc.stdout + proc.stderr)

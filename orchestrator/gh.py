@@ -7,7 +7,6 @@ credential helper that reads an environment variable, so they never appear in ar
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 
@@ -23,6 +22,9 @@ STATUS_LABELS = (
     "status:needs-human",
 )
 EVENT_MARKER = re.compile(r"<!-- newsroom-event (\{.*?\}) -->")
+# Only a marker at the very end of a comment counts: the harness appends it after all
+# agent-written text, so text an agent (or anyone) writes earlier in the body cannot forge one.
+TRAILING_MARKER = re.compile(r"<!-- newsroom-event (\{[^\n]*\}) -->\s*$")
 
 
 class GitHub:
@@ -32,9 +34,7 @@ class GitHub:
 
     # -- plumbing -------------------------------------------------------------------------
     def _env(self, agent: str) -> dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if not k.startswith(config.SECRET_ENV_PREFIXES)}
-        env["GH_TOKEN"] = config.github_token(agent, self.team)
-        return env
+        return config.github_env(config.github_token(agent, self.team))
 
     def gh(self, agent: str, *args: str, input_text: str | None = None) -> str:
         """Run gh with `agent`'s token. The human's own gh login is never used."""
@@ -67,8 +67,9 @@ class GitHub:
         return int(url.rstrip("/").rsplit("/", 1)[1])
 
     def list_tickets(self, agent: str, state: str = "all") -> list[dict]:
+        # Only tickets dispatch created count; on a public repo anyone can open issues.
         out = self.gh(agent, "issue", "list", "-R", self.repo, "--label", "ticket", "--state", state,
-                      "--limit", "100", "--json", "number,title,body,state,labels")
+                      "--author", self.team.bot_login, "--limit", "100", "--json", "number,title,body,state,labels")
         tickets = json.loads(out)
         for t in tickets:
             t["labels"] = [l["name"] for l in t["labels"]]
@@ -94,20 +95,42 @@ class GitHub:
             body += f"\n\n<!-- newsroom-event {json.dumps(event, sort_keys=True)} -->"
         self.gh(agent, "issue", "comment", str(number), "-R", self.repo, "--body-file", "-", input_text=body)
 
-    def events(self, agent: str, number: int) -> list[dict]:
-        """Machine-readable events previously posted on an issue or PR conversation."""
-        found = []
+    def team_comments(self, agent: str, number: int) -> list[dict]:
+        """Comments written by the team's machine account, each with its trailing event (or None).
+
+        Comments from any other account are ignored: on a public repository anyone can comment,
+        and comment text is fed back to agents as review feedback.
+        """
+        out = []
         for c in self.get_issue(agent, number).get("comments", []):
-            for m in EVENT_MARKER.finditer(c.get("body", "")):
-                found.append(json.loads(m.group(1)))
-        return found
+            if (c.get("author") or {}).get("login") != self.team.bot_login:
+                continue
+            body = c.get("body", "")
+            m = TRAILING_MARKER.search(body)
+            event = None
+            if m:
+                try:
+                    event = json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    event = None
+            out.append({"body": body[: m.start()].rstrip() if m else body, "event": event})
+        return out
+
+    def events(self, agent: str, number: int) -> list[dict]:
+        return [c["event"] for c in self.team_comments(agent, number) if c["event"]]
 
     # -- pull requests -----------------------------------------------------------------------
-    def find_pr(self, agent: str, branch: str) -> dict | None:
-        out = self.gh(agent, "pr", "list", "-R", self.repo, "--head", branch, "--state", "all",
-                      "--json", "number,state,headRefOid,url,mergedAt")
-        prs = json.loads(out)
-        return prs[0] if prs else None
+    def find_pr(self, agent: str, branch: str, open_only: bool = False) -> dict | None:
+        """The team's PR for `branch`: same repository (no forks), opened by the machine account,
+        targeting the base branch. Anything else with a matching branch name is ignored."""
+        out = self.gh(agent, "pr", "list", "-R", self.repo, "--head", branch, "--state", "open" if open_only else "all",
+                      "--json", "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,author,url,mergedAt")
+        for pr in json.loads(out):
+            if (pr.get("headRefName") == branch and not pr.get("isCrossRepository")
+                    and (pr.get("author") or {}).get("login") == self.team.bot_login
+                    and pr.get("baseRefName") == self.team.base_branch):
+                return pr
+        return None
 
     def create_pr(self, agent: str, branch: str, title: str, body: str) -> int:
         url = self.gh(agent, "pr", "create", "-R", self.repo, "--base", self.team.base_branch,
@@ -128,14 +151,12 @@ class GitHub:
 
 
 def git_as(team: config.Team, agent: str, worktree: str, *args: str) -> str:
-    """Run a networked git command (fetch/push) with `agent`'s token, kept out of argv."""
-    token = config.github_token(agent, team)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(config.SECRET_ENV_PREFIXES)}
-    env["NEWSROOM_PUSH_TOKEN"] = token
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    """Run a networked git command (clone/fetch/push) with `agent`'s token, kept out of argv."""
+    env = config.github_env(config.github_token(agent, team))
     helper = '!f() { echo username=x-access-token; echo "password=$NEWSROOM_PUSH_TOKEN"; }; f'
     proc = subprocess.run(
-        ["git", "-C", worktree, "-c", "credential.helper=", "-c", f"credential.helper={helper}", *args],
+        ["git", "-C", worktree, "-c", "credential.helper=", "-c", f"credential.helper={helper}",
+         "-c", "core.hooksPath=/dev/null", *args],
         env=env, capture_output=True, text=True,
     )
     if proc.returncode != 0:

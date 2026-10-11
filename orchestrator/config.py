@@ -25,8 +25,12 @@ NODE_BIN_DIR = os.environ.get("NEWSROOM_NODE_BIN", "/opt/homebrew/opt/node/bin")
 HERMES_BIN = os.environ.get("HERMES_BIN", str(Path.home() / ".local" / "bin" / "hermes"))
 TEST_IMAGE = os.environ.get("NEWSROOM_TEST_IMAGE", "newsroom-test-runner:1")
 
-# Variables that must never reach an agent runtime or the test container.
-SECRET_ENV_PREFIXES = ("GH_", "GITHUB_", "NEWSROOM_PUSH_TOKEN")
+# Subprocess environments are built from an allowlist, never by copying os.environ: the
+# operator's shell may hold unrelated credentials that must not reach agents or gh/git.
+BASE_ENV_KEYS = ("HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
+                 "PATH", "DOCKER_HOST", "DOCKER_CONTEXT")
+# The only secrets agent runtimes may receive (model keys from ENV_FILE).
+MODEL_KEY_NAMES = ("OLLAMA_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY")
 
 
 @dataclass
@@ -49,8 +53,9 @@ def load_team(path: Path = TEAM_FILE) -> Team:
     return Team(**data)
 
 
-def read_env_file(path: Path = ENV_FILE) -> dict[str, str]:
+def read_env_file(path: Path | None = None) -> dict[str, str]:
     """Parse KEY=VALUE lines. Values are returned to the caller and never logged."""
+    path = path or ENV_FILE
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -64,13 +69,35 @@ def read_env_file(path: Path = ENV_FILE) -> dict[str, str]:
     return values
 
 
+def base_env() -> dict[str, str]:
+    return {k: os.environ[k] for k in BASE_ENV_KEYS if k in os.environ}
+
+
 def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Environment for agent runtimes: model keys yes, GitHub credentials no."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(SECRET_ENV_PREFIXES)}
-    env.update(read_env_file())
-    env["PATH"] = f"{NODE_BIN_DIR}:{Path(HERMES_BIN).parent}:{env.get('PATH', '')}"
+    """Environment for agent runtimes: allowlisted basics plus model keys; no GitHub credentials."""
+    env = base_env()
+    env.update({k: v for k, v in read_env_file().items() if k in MODEL_KEY_NAMES})
+    env["PATH"] = f"{NODE_BIN_DIR}:{Path(HERMES_BIN).parent}:{env.get('PATH', '/usr/bin:/bin')}"
     if extra:
         env.update(extra)
+    return env
+
+
+def github_env(token: str) -> dict[str, str]:
+    """Environment for gh/git acting as one agent.
+
+    - GH_CONFIG_DIR points at an empty directory so gh can never fall back to the human's login.
+    - Global/system git config is ignored, so an `insteadOf` rewrite or credential helper in the
+      operator's config cannot redirect or capture the token.
+    """
+    empty = WORK_DIR / "empty-gh-config"
+    empty.mkdir(parents=True, exist_ok=True, mode=0o700)
+    env = base_env()
+    env.update({
+        "GH_TOKEN": token, "GH_CONFIG_DIR": str(empty), "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
+        "NEWSROOM_PUSH_TOKEN": token, "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+    })
     return env
 
 
@@ -83,6 +110,9 @@ def github_token(agent_name: str, team: Team) -> str:
     path = TOKENS_DIR / team.agent(agent_name)["token_file"]
     if not path.exists():
         raise MissingToken(f"GitHub token for agent '{agent_name}' not found at {path}")
+    st = path.lstat()
+    if path.is_symlink() or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise MissingToken(f"refusing {path}: must be a regular file owned by you with mode 600")
     token = path.read_text().strip()
     if not token:
         raise MissingToken(f"GitHub token file for agent '{agent_name}' is empty: {path}")

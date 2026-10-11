@@ -81,16 +81,35 @@ attempt and OpenClaw session id in trailers, so it can be matched to the OpenCla
 
 ## Security notes
 
-- Agents never see a `.git` directory. They work on a plain copy of the tree, so a
+The repository is public, so anyone can open issues, comment, and open fork PRs. The harness
+treats all of that as untrusted:
+
+- **Only team artifacts drive the workflow.** Tickets must be authored by the machine account;
+  PRs must come from the same repository (no forks), be authored by the machine account and
+  target `main`; review/test feedback that is fed back to the builder comes only from the
+  machine account's comments.
+- **Event markers cannot be forged.** Only a `newsroom-event` marker at the very end of a
+  machine-account comment counts; the harness appends it after all agent-written text.
+- **Statuses land on the reviewed commit.** The reviewer's diff is computed locally from the
+  exact PR head SHA that the `agent/review` status is posted to; if the head moved, the review
+  is aborted. The tester verifies its checkout matches the PR head the same way.
+- **Agents never see a `.git` directory.** They work on a plain copy of the tree, so a
   prompt-injected agent cannot plant git hooks or `core.fsmonitor` settings that would run
-  on the host when the harness commits. Symlinks and files over 512 KB are not imported.
-- GitHub tokens live in `~/.config/newsroom/tokens/<agent>` (mode 600) and are passed only to
-  that agent's `gh`/`git` subprocess through the environment, never in argv or logs.
-  Agent runtimes and the test container get an environment with all `GH_*`/`GITHUB_*`
-  variables removed.
-- Model keys live in `~/.config/newsroom/env` and reach Hermes (subprocess environment)
-  and the OpenClaw gateway (`scripts/start-gateway.sh`). OpenClaw sandboxes have no network,
-  so model calls are made by the gateway, not from inside the sandbox.
+  on the host. Symlinks are dropped when exporting trees to agents or to the test container,
+  never followed; agent files are read with `O_NOFOLLOW` and must resolve inside the
+  workspace; harness files written into agent workspaces (`TICKET.md`, `BRIEF.md`,
+  `AGENTS.md`) replace rather than follow a planted symlink.
+- **Environments are allowlists.** Agent runtimes get `HOME`, `PATH`, locale and the model
+  keys named in `MODEL_KEY_NAMES`, nothing else from the operator's shell. `gh`/`git` get one
+  agent's token plus an empty `GH_CONFIG_DIR` (no fallback to the human's login) and ignore
+  global/system git config (no `insteadOf` redirection of the token). Tokens are passed via
+  environment, never argv; token files must be owned by the user with mode 600.
+- **Hermes agents have no tools that touch the system.** `-t todo` was verified from a live
+  session export: the only tool call available was `todo_list`. (An empty `-t` would load
+  Hermes's default tool set, including the terminal; the harness refuses it.)
+- **OpenClaw exec is denied at runtime**, verified live: the builder's `exec` call returned
+  `exec denied: host=sandbox security=deny`. The `coding` tool profile only exposes the tool
+  schema.
 - `scripts/setup_agents.py` refuses to run if the OpenClaw profile's verified security
   baseline (sandbox all, network none, read-only root, cap-drop ALL, exec deny, elevated off,
   loopback token-auth gateway) has drifted.
@@ -109,7 +128,7 @@ python3 -m orchestrator run --max 10     # loop until idle or waiting for a huma
 python3 -m orchestrator report           # token & model report
 
 # harness tests (no network, no tokens needed)
-uv run --with pytest python -m pytest -q orchestrator/tests
+uv run --python 3.14 --with pytest python -m pytest -q orchestrator/tests
 ```
 
 ## Known limitations
@@ -119,6 +138,9 @@ uv run --with pytest python -m pytest -q orchestrator/tests
   per-agent tokens (see `docs/agent-identity.md`).
 - Reviewer and tester tokens can both write any status context; separation between them
   is by convention in the harness, not enforced by GitHub.
+- A PR diff can contain prompt-injection text aimed at the reviewer. The reviewer has no
+  tools, so the worst case is a wrong verdict; the tester still runs the code and a human
+  must approve the merge.
 - Local fallback models are weak at tool use and planning. The local Ollama server truncates
   prompts at its default context unless started with `OLLAMA_CONTEXT_LENGTH=65536`; Hermes
   requires a 64K window. Local models are a last resort, not a working tier.

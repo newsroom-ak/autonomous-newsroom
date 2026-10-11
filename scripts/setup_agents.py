@@ -26,7 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from orchestrator import config  # noqa: E402
+from orchestrator import config, workspace  # noqa: E402
 
 TEAM = json.loads(config.TEAM_FILE.read_text())
 OC_CONFIG = Path.home() / f".openclaw-{config.OPENCLAW_PROFILE}" / "openclaw.json"
@@ -164,7 +164,8 @@ def setup_openclaw(check_only: bool) -> None:
         e["model"] = {"primary": spec["model"], "fallbacks": spec["fallbacks"]}
         e["tools"] = {"profile": "coding"}
         e["sandbox"] = {"workspaceAccess": "rw", "scope": "agent"}
-        shutil.copyfile(REPO / "agents" / "openclaw" / agent_id / "AGENTS.md", ws / "AGENTS.md")
+        # The workspace is agent-writable: never follow a symlink planted there.
+        workspace.safe_write(ws / "AGENTS.md", (REPO / "agents" / "openclaw" / agent_id / "AGENTS.md").read_text())
         (ws / "BOOTSTRAP.md").unlink(missing_ok=True)
         print(f"  openclaw:{agent_id} -> {spec['model']} (+{len(spec['fallbacks'])} fallbacks), workspace {ws}")
     ensure_local_models(cfg)
