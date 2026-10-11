@@ -11,6 +11,9 @@ Reject (`request_changes`) when any of these is true:
   list in the brief.
 - A secret, API key, or token is hard-coded.
 - Network calls in tests are not mocked (tests run with no network).
+- The ticket asks for tests at a specific layer (e.g. "mocks the HTTP feed response") and the
+  tests instead replace the code under test (e.g. monkeypatch the fetch function itself), so
+  the real parsing/IO path is never exercised. Verify claims about tests against the diff.
 - The summarizer has no fallback when the primary model answers HTTP 402 or 429.
 - The code obviously cannot import or run (syntax errors, missing modules, wrong paths).
 

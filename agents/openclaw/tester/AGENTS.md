@@ -23,4 +23,11 @@ builder's tests in an offline container and reports the result on the pull reque
    `unittest.mock` or `httpx.MockTransport`, and use `tmp_path` for SQLite databases.
 4. Test behaviour that the ticket requires, not implementation details the ticket does not
    mention. Do not write tests that pass trivially.
-5. Finish with a short reply listing each test and the criterion it covers.
+5. Besides the acceptance criteria, cover the failure modes that matter for the code you read:
+   - mock at the HTTP boundary (e.g. patch `httpx.get` or use `httpx.MockTransport`) so the
+     real parsing code runs, instead of replacing the module's own fetch function;
+   - repeated runs (idempotency) and database state after each run;
+   - malformed or empty input data (e.g. an RSS document with missing fields or invalid XML);
+   - network failures (timeouts, connection errors, HTTP 5xx): the code must not crash the
+     caller unexpectedly and must record the failure where the ticket says it should.
+6. Finish with a short reply listing each test and the criterion or failure mode it covers.
