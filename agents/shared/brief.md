@@ -17,7 +17,11 @@ Required:
    (Google News RSS search or the Hacker News API). No personal data.
 4. Articles are stored in a database (SQLite).
 5. The page shows "updated X ago", based on the last successful refresh.
-6. Summaries and tags come from a model. Each article is summarized once and the result is
+6. A small JSON API (`GET /api/articles`) returns the same articles and the last refresh time.
+7. The refresh runs automatically on a schedule inside the app (no button required): a
+   background task started with the web app runs the refresh every
+   `NEWSROOM_REFRESH_MINUTES` minutes (default 180), in addition to the CLI entry point.
+8. Summaries and tags come from a model. Each article is summarized once and the result is
    stored. The summarizer calls a primary free model and falls back to a second free model
    when the first one answers HTTP 402 or 429. If both fail, the item is still stored with
    a plain fallback summary (e.g. the truncated title) so the page never breaks.
@@ -39,9 +43,16 @@ filter, a second source, a page listing the last few refresh runs.
     chat completions endpoint; default Ollama Cloud `https://ollama.com/v1`)
   - `SUMMARY_FALLBACK_URL`, `SUMMARY_FALLBACK_MODEL`, `SUMMARY_FALLBACK_KEY`
     (default OpenRouter `https://openrouter.ai/api/v1`)
-- The refresh job is a CLI entry point: `python -m newsroom.refresh` (run from `app/`).
-  Scheduling is done by cron on the server, so the job must be idempotent.
+- The refresh job is a CLI entry point: `python -m newsroom.refresh` (run from `app/`) and is
+  also called by the in-app scheduler, so it must be idempotent. `NEWSROOM_REFRESH_MINUTES`
+  configures the schedule.
 - Tests run with `cd app && python -m pytest -q` inside a container with **no network**.
   Tests must mock every HTTP call (feeds and model APIs) and use a temporary database.
 - Each ticket must be small enough for one pull request and must state testable
   acceptance criteria.
+
+## Delivery order (business priority)
+
+Start with the foundation that everything else depends on: fetching real articles from the
+public feed and storing them in SQLite. Then summaries/tags, then the API and page with
+"updated X ago", then the scheduled refresh.

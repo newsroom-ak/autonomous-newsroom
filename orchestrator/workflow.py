@@ -34,7 +34,8 @@ Rules:
 - 4 to 7 tickets, ordered so dependencies come first. Core requirements only; no nice-to-haves.
 - Each ticket is one pull request a small coding model can finish in one pass.
 - Acceptance criteria must be checkable by offline pytest (HTTP mocked, temporary SQLite).
-- Deployment and cron setup are done by the human engineer; do not create tickets for them.
+- Follow the brief's delivery order. Include the scheduled refresh as a ticket.
+- Deployment (server, hosting) is done by the human engineer; do not create tickets for it.
 
 PRODUCT BRIEF:
 {brief}
