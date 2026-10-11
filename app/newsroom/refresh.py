@@ -58,16 +58,7 @@ def _run_refresh() -> None:
             error_message=None,
         )
     except Exception as exc:
-        # Determine if this is a network‑related httpx error.
-        is_httpx_error = False
-        try:
-            import httpx
-            if isinstance(exc, httpx.RequestError):
-                is_httpx_error = True
-        except Exception:
-            pass
-
-        # Record failure details regardless of type.
+        # Record failure details regardless of exception type.
         db.update_refresh_run(
             run_id=run_id,
             finished_at=datetime.utcnow().isoformat(),
@@ -76,12 +67,12 @@ def _run_refresh() -> None:
             status="error",
             error_message=str(exc),
         )
-        # Print traceback for CLI visibility.
+        # Print traceback for CLI visibility (helps debugging when run manually).
         traceback.print_exc(file=sys.stderr)
-        if is_httpx_error:
-            return
-        else:
-            sys.exit(1)
+        # Do **not** exit the process. The ticket explicitly requires the function
+        # to return normally after recording the error run, even for network‑related
+        # httpx errors such as ``httpx.ConnectError`` or ``httpx.HTTPStatusError``.
+        return
 
 
 def main() -> None:
