@@ -90,9 +90,25 @@ class Orchestrator:
         self.gh = github or GitHub(self.team)
 
     # -- helpers ----------------------------------------------------------------------------
-    def _hermes(self, agent: str, prompt: str) -> runtimes.AgentReply:
+    def _hermes(self, agent: str, prompt: str, ticket: int | None = None) -> runtimes.AgentReply:
         spec = self.team.agent(agent)
-        return runtimes.run_hermes(spec["profile"], prompt, toolsets=spec.get("toolsets", "todo"))
+        reply = runtimes.run_hermes(spec["profile"], prompt, toolsets=spec.get("toolsets", "todo"))
+        return self._require_allowed_provider(agent, reply, ticket)
+
+    def _openclaw(self, agent: str, message: str, session: str, ticket: int | None = None) -> runtimes.AgentReply:
+        reply = runtimes.run_openclaw(self.team.agent(agent)["agent_id"], message, session=session)
+        return self._require_allowed_provider(agent, reply, ticket)
+
+    def _require_allowed_provider(self, agent: str, reply: runtimes.AgentReply, ticket: int | None) -> runtimes.AgentReply:
+        allowed = self.team.allowed_providers
+        if allowed and reply.ok and reply.usage.provider not in allowed:
+            self._record(Event(event="provider-refused", agent=agent, runtime=self._runtime(agent), ticket=ticket,
+                               outcome="refused", usage=reply.usage, duration_s=reply.duration_s,
+                               detail=f"reply served by {reply.usage.provider}/{reply.usage.model}; allowed {allowed}"))
+            raise runtimes.AgentError(
+                f"{agent} was answered by {reply.usage.provider}/{reply.usage.model}, not an allowed cloud provider "
+                f"{allowed}; cloud inference is probably unavailable. Stopping instead of using a local model.")
+        return reply
 
     def _runtime(self, agent: str) -> str:
         return self.team.agent(agent)["runtime"]
@@ -265,10 +281,10 @@ class Orchestrator:
         workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
-        reply = runtimes.run_openclaw(
-            self.team.agent("builder")["agent_id"],
+        reply = self._openclaw(
+            "builder",
             BUILD_MESSAGE.format(ticket=ticket, attempt=attempt, max_attempts=self.team.max_attempts),
-            session=f"ticket-{ticket}-build-{attempt}",
+            session=f"ticket-{ticket}-build-{attempt}", ticket=ticket,
         )
         changed, outside = workspace.import_changes(ws / "repo", repo, self.team.allowed_paths)
         phase = self._phase("coding", attempt)
@@ -344,7 +360,7 @@ class Orchestrator:
             diff = diff[:MAX_DIFF_CHARS] + "\n... [diff truncated by harness]"
         prompt = REVIEW_PROMPT.format(pr=pr["number"], ticket=ticket, title=issue["title"], body=issue["body"],
                                       constraints=self._constraints(), diff=diff)
-        reply = self._hermes("reviewer", prompt)
+        reply = self._hermes("reviewer", prompt, ticket=ticket)
         try:
             if not reply.ok:
                 raise runtimes.AgentError(f"reviewer failed: {reply.error}")
@@ -397,9 +413,8 @@ class Orchestrator:
         workspace.safe_write(ws / "TICKET.md", render_ticket(issue, [], "", attempt))
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
-        reply = runtimes.run_openclaw(self.team.agent("tester")["agent_id"],
-                                      TEST_MESSAGE.format(pr=pr["number"], ticket=ticket),
-                                      session=f"ticket-{ticket}-test-{attempt}")
+        reply = self._openclaw("tester", TEST_MESSAGE.format(pr=pr["number"], ticket=ticket),
+                               session=f"ticket-{ticket}-test-{attempt}", ticket=ticket)
         test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
         if not reply.ok or test_bytes is None:
             reason = reply.error or "tester wrote no acceptance/test_acceptance.py"

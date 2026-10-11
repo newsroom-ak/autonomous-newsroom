@@ -5,6 +5,7 @@
   "bot_login": "newsroom-ak-bot",
   "bot_email": "340858364+newsroom-ak-bot@users.noreply.github.com",
   "max_attempts": 3,
+  "allowed_providers": ["ollama-cloud", "openrouter"],
   "allowed_paths": [
     "app/"
   ],

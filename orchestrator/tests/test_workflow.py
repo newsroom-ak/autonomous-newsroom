@@ -91,6 +91,7 @@ def reply(text, ok=True, model="m"):
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     monkeypatch.setattr(config, "LEDGER_FILE", tmp_path / "work" / "ledger.jsonl")
+    monkeypatch.setattr(TEAM, "allowed_providers", [])  # fake replies use provider "p"
     fake = FakeGitHub()
     orch = workflow.Orchestrator(team=TEAM, github=fake)
     return orch, fake, tmp_path
@@ -434,3 +435,13 @@ def test_offline_runner_has_no_network_and_reports_failures(tmp_path):
     rc, out = workflow.run_tests_offline(repo, acc.read_text())
     assert rc == 1, out
     assert "1 failed, 2 passed" in out
+
+
+def test_local_fallback_reply_is_refused(env, monkeypatch):
+    orch, fake, _ = env
+    monkeypatch.setattr(orch.team, "allowed_providers", ["ollama-cloud"])
+    monkeypatch.setattr(runtimes, "run_hermes", lambda *a, **k: reply(json.dumps(PLAN)))  # provider "p"
+    with pytest.raises(runtimes.AgentError, match="not an allowed cloud provider"):
+        orch.plan()
+    assert fake.issues == {}
+    assert ledger.read()[-1]["event"] == "provider-refused"

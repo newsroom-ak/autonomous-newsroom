@@ -43,6 +43,9 @@ class Team:
     max_attempts: int
     allowed_paths: list[str]
     agents: dict[str, dict] = field(default_factory=dict)
+    # Providers whose replies the harness accepts. A reply served by anything else (e.g. a
+    # local fallback model) aborts the step instead of silently degrading the work.
+    allowed_providers: list[str] = field(default_factory=list)
 
     def agent(self, name: str) -> dict:
         return self.agents[name]
