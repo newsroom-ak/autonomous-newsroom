@@ -439,6 +439,10 @@ class Orchestrator:
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
         message = TEST_MESSAGE.format(pr=pr["number"], ticket=ticket)
+        if seed is not None and not focus:
+            message += ("\n\nRE-RUN after a builder repair. acceptance/test_acceptance.py already contains "
+                        "your tests. Read the updated code; change a test only if it is wrong about the "
+                        "ticket. Do not delete or weaken tests to make them pass.")
         if focus:
             message += ("\n\nTARGETED RE-TEST requested by the human engineer. "
                         + ("acceptance/test_acceptance.py already contains your earlier tests: keep them and "
@@ -449,8 +453,9 @@ class Orchestrator:
         session = f"ticket-{ticket}-test-{attempt}" + ("-recheck" if focus else "")
         reply = self._openclaw("tester", message, session=session, ticket=ticket, max_turns=max_turns, model=model)
         test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
-        # A budget-stopped run still counts if it produced a new test file.
-        produced = test_bytes is not None and (seed is None or test_bytes != seed)
+        # A budget-stopped run still counts if it produced a new test file. In a plain re-run
+        # (kept tests, no focus) the tester may legitimately leave its tests unchanged.
+        produced = test_bytes is not None and (seed is None or test_bytes != seed or not focus)
         if not produced:
             reason = reply.error or ("tester added no new tests" if seed else "tester wrote no acceptance/test_acceptance.py")
             self.gh.set_commit_status("tester", sha, "agent/test", "error", f"tester: {reason}"[:140])
