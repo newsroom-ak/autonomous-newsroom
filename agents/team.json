@@ -5,16 +5,32 @@
   "bot_login": "newsroom-ak-bot",
   "bot_email": "340858364+newsroom-ak-bot@users.noreply.github.com",
   "max_attempts": 3,
-  "allowed_paths": ["app/"],
+  "allowed_paths": [
+    "app/"
+  ],
   "agents": {
     "dispatch": {
       "runtime": "hermes",
       "profile": "dispatch",
       "role": "orchestrator: turns the brief into tickets, assigns them, re-assigns rejected work",
-      "model": {"provider": "ollama-cloud", "model": "kimi-k3"},
+      "model": {
+        "provider": "ollama-cloud",
+        "model": "nemotron-3-ultra"
+      },
       "fallbacks": [
-        {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
-        {"provider": "custom", "model": "llama3.1:8b", "base_url": "http://127.0.0.1:11434/v1"}
+        {
+          "provider": "ollama-cloud",
+          "model": "gpt-oss:120b"
+        },
+        {
+          "provider": "openrouter",
+          "model": "nvidia/nemotron-3-ultra-550b-a55b:free"
+        },
+        {
+          "provider": "custom",
+          "model": "llama3.1:8b",
+          "base_url": "http://127.0.0.1:11434/v1"
+        }
       ],
       "toolsets": "todo",
       "token_file": "dispatch"
@@ -23,18 +39,36 @@
       "runtime": "openclaw",
       "agent_id": "builder",
       "role": "builder: implements one ticket per pull request, edits only app/",
-      "model": "ollama-cloud/kimi-k2.7-code",
-      "fallbacks": ["openrouter/poolside/laguna-s-2.1:free", "ollama/qwen2.5:7b"],
+      "model": "ollama-cloud/gpt-oss:120b",
+      "fallbacks": [
+        "ollama-cloud/nemotron-3-super",
+        "openrouter/poolside/laguna-s-2.1:free",
+        "ollama/qwen2.5:7b"
+      ],
       "token_file": "builder"
     },
     "reviewer": {
       "runtime": "hermes",
       "profile": "reviewer",
       "role": "reviewer: reads each PR diff against its ticket, approves or sends it back",
-      "model": {"provider": "ollama-cloud", "model": "glm-5.3"},
+      "model": {
+        "provider": "ollama-cloud",
+        "model": "nemotron-3-super"
+      },
       "fallbacks": [
-        {"provider": "openrouter", "model": "google/gemma-4-31b-it:free"},
-        {"provider": "custom", "model": "llama3.1:8b", "base_url": "http://127.0.0.1:11434/v1"}
+        {
+          "provider": "ollama-cloud",
+          "model": "gpt-oss:120b"
+        },
+        {
+          "provider": "openrouter",
+          "model": "google/gemma-4-31b-it:free"
+        },
+        {
+          "provider": "custom",
+          "model": "llama3.1:8b",
+          "base_url": "http://127.0.0.1:11434/v1"
+        }
       ],
       "toolsets": "todo",
       "token_file": "reviewer"
@@ -44,7 +78,11 @@
       "agent_id": "tester",
       "role": "tester: writes independent acceptance tests from the ticket; the harness runs them in an offline container",
       "model": "ollama-cloud/gpt-oss:20b",
-      "fallbacks": ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "ollama/qwen2.5:7b"],
+      "fallbacks": [
+        "ollama-cloud/nemotron-3-nano:30b",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+        "ollama/qwen2.5:7b"
+      ],
       "token_file": "tester"
     }
   }

@@ -7,11 +7,16 @@ configured in [`agents/team.json`](../agents/team.json); this page explains the 
 
 | Agent | Runtime | Role | Primary model → fallbacks | Tools | GitHub token |
 |---|---|---|---|---|---|
-| `dispatch` | Hermes profile `dispatch` | Orchestrator: brief → tickets, assigns, re-assigns rejected work | `ollama-cloud/kimi-k3` → `openrouter/nemotron-3-ultra:free` → local `llama3.1:8b` | `todo` only (no shell, files or web) | `dispatch`: issues r/w |
-| `builder` | OpenClaw agent `builder` | Implements one ticket per PR, only under `app/` | `ollama-cloud/kimi-k2.7-code` → `openrouter/laguna-s-2.1:free` → local `qwen2.5:7b` | OpenClaw `coding` profile; exec denied; Docker sandbox, no network | `builder`: contents + PRs r/w, **no commit statuses** |
-| `reviewer` | Hermes profile `reviewer` | Reads each PR diff against its ticket; approves or sends back | `ollama-cloud/glm-5.3` → `openrouter/gemma-4-31b:free` → local `llama3.1:8b` | `todo` only | `reviewer`: PRs + statuses |
-| `tester` | OpenClaw agent `tester` | Writes independent acceptance tests from the ticket; harness runs them offline | `ollama-cloud/gpt-oss:20b` → `openrouter/nemotron-3-super:free` → local `qwen2.5:7b` | same sandbox as builder | `tester`: PRs + statuses |
+| `dispatch` | Hermes profile `dispatch` | Orchestrator: brief → tickets, assigns, re-assigns rejected work | `ollama-cloud/nemotron-3-ultra` → `ollama-cloud/gpt-oss:120b` → `openrouter/nemotron-3-ultra:free` → local `llama3.1:8b` | `todo` only (no shell, files or web) | `dispatch`: issues r/w |
+| `builder` | OpenClaw agent `builder` | Implements one ticket per PR, only under `app/` | `ollama-cloud/gpt-oss:120b` → `ollama-cloud/nemotron-3-super` → `openrouter/laguna-s-2.1:free` → local `qwen2.5:7b` | OpenClaw `coding` profile; exec denied; Docker sandbox, no network | `builder`: contents + PRs r/w, **no commit statuses** |
+| `reviewer` | Hermes profile `reviewer` | Reads each PR diff against its ticket; approves or sends back | `ollama-cloud/nemotron-3-super` → `ollama-cloud/gpt-oss:120b` → `openrouter/gemma-4-31b:free` → local `llama3.1:8b` | `todo` only | `reviewer`: PRs + statuses |
+| `tester` | OpenClaw agent `tester` | Writes independent acceptance tests from the ticket; harness runs them offline | `ollama-cloud/gpt-oss:20b` → `ollama-cloud/nemotron-3-nano:30b` → `openrouter/nemotron-3-super:free` → local `qwen2.5:7b` | same sandbox as builder | `tester`: PRs + statuses |
 | human (`Ankita2525`) | — | Reviews and merges | — | — | ruleset approval |
+
+Model choice is constrained by the Ollama Cloud free plan. Probed on 2026-10-11 with 1-token
+requests: `nemotron-3-ultra`, `nemotron-3-super`, `nemotron-3-nano:30b`, `gpt-oss:120b`,
+`gpt-oss:20b` and `gemma4:31b` are included; `kimi-*`, `glm-*`, `minimax-*`, `deepseek-*` and
+`mistral-large-*` return HTTP 402 ("not included in your free usage").
 
 Why this split:
 
