@@ -148,17 +148,20 @@ def setup_openclaw(check_only: bool) -> None:
             raise SystemExit("OpenClaw security defaults differ from the verified baseline; refusing to continue.")
     if check_only:
         return
-    entries = cfg.setdefault("agents", {}).setdefault("entries", {})
-    for name, spec in TEAM["agents"].items():
-        if spec["runtime"] != "openclaw":
-            continue
+    oc_agents = [spec for spec in TEAM["agents"].values() if spec["runtime"] == "openclaw"]
+    # `agents add` rewrites the config file, so add every missing agent first and only then
+    # load the config and apply settings (otherwise earlier in-memory edits are lost).
+    existing = set(cfg.get("agents", {}).get("entries", {}))
+    for spec in oc_agents:
+        ws = config.WORK_DIR / spec["agent_id"]
+        ws.mkdir(parents=True, exist_ok=True)
+        if spec["agent_id"] not in existing:
+            oc("agents", "add", spec["agent_id"], "--workspace", str(ws), "--model", spec["model"], "--non-interactive", "--json")
+    cfg = json.loads(OC_CONFIG.read_text())
+    entries = cfg["agents"]["entries"]
+    for spec in oc_agents:
         agent_id = spec["agent_id"]
         ws = config.WORK_DIR / agent_id
-        ws.mkdir(parents=True, exist_ok=True)
-        if agent_id not in entries:
-            oc("agents", "add", agent_id, "--workspace", str(ws), "--model", spec["model"], "--non-interactive", "--json")
-            cfg = json.loads(OC_CONFIG.read_text())
-            entries = cfg["agents"]["entries"]
         e = entries[agent_id]
         e["description"] = spec["role"]
         e["model"] = {"primary": spec["model"], "fallbacks": spec["fallbacks"]}
