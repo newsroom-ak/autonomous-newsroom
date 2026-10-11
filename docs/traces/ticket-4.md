@@ -22,8 +22,12 @@ All entries below are real. Ticket and PR comments are on GitHub
 | 15:41 | build | builder · gpt-oss:120b | 2 | commit `3f96ac7` (refresh.py only) | 11 | 11,090 / 3,791 / 124,785 |
 | 15:42 | review | reviewer · nemotron-3-super | 2 | **approve** `3f96ac7` (missed HTTP 500 gap) | 2 | 7,911 / 4,026 / 12,435 |
 | 15:43 | test | tester · gpt-oss:120b | 2 | **fail** `3f96ac7`: HTTP 500 still calls `sys.exit(1)` | 9 | 7,134 / 3,305 / 85,783 |
+| 16:2x | assign | dispatch · nemotron-3-ultra | 3 | #4 → builder (final attempt) | 2 | 6,017 / 415 / 6,926 |
+| 16:2x | build | builder · gpt-oss:120b | 3 | commit `8a0603d`: any exception recorded, function returns | 14 | 10,372 / 4,516 / 185,656 |
+| 16:2x | review | reviewer · nemotron-3-super | 3 | approve `8a0603d` | 2 | 7,891 / 3,721 / 12,013 |
+| 16:2x | test | tester · gpt-oss:120b | 3 | **pass** `8a0603d`: 9 passed, tests unchanged from the failing run | 13 | 7,994 / 3,372 / 127,254 |
 
-Runtime totals: 1,169,223 tokens for this ticket so far. For OpenClaw runs the runtime total
+Runtime totals: 1,501,072 tokens for this ticket (all attempts). For OpenClaw runs the runtime total
 is much larger than input + output; it appears to count the full prompt (system prompt +
 tool schemas, ~7–11K tokens) again on every turn. This is an interpretation, not confirmed
 by OpenClaw documentation; `openclaw gateway usage-cost` returned zeros for this profile.
@@ -56,11 +60,18 @@ by OpenClaw documentation; `openclaw gateway usage-cost` returned zeros for this
    triggers". The reviewer approved it; the tester's re-run caught it:
    `newsroom/refresh.py:84: in _run_refresh … SystemExit: 1` after `HTTPStatusError: 500`.
 
-## State at the end of the recheck
+7. **Final attempt fixed it.** Attempt 3 (`8a0603d`) records any exception as an error run
+   and returns. The tester re-ran its unchanged tests (the same HTTP 500 and connection-error
+   tests that failed on `3f96ac7`): 9 passed.
 
-- PR #9 head `3f96ac7`: `agent/review` success, `agent/test` failure. Not mergeable under the
-  ruleset; not ready for human approval.
-- Ticket #4: `status:changes-requested`, builder attempts used: 2 of 3.
+## State after attempt 3
+
+- PR #9 head `8a0603d`: `agent/review` success, `agent/test` success (pytest 9 passed).
+- Ticket #4: `status:ready-for-merge`, awaiting human review and merge. Builder attempts: 3 of 3.
+- Known minor gap: the CLI (`python -m newsroom.refresh`) now exits 0 even when a refresh
+  fails; a nonzero CLI exit code was optional for this ticket.
+- Turn budgets are soft: the tester used 13 turns against a ~8 budget because the wall-clock
+  deadline was not reached.
 
 ## Changes made because of this trace
 
