@@ -21,6 +21,10 @@ from .ledger import Event
 
 DEPENDS_RE = re.compile(r"^Depends on:\s*(.*)$", re.MULTILINE | re.IGNORECASE)
 MAX_DIFF_CHARS = 60_000
+MAX_FEEDBACK_CHARS = 16_000
+# OpenClaw has no per-run turn limit, so a turn budget is enforced approximately: the agent is
+# told its budget and the run gets a wall-clock deadline of SECONDS_PER_TURN per budgeted turn.
+SECONDS_PER_TURN = 10
 TEST_TIMEOUT_S = 300
 
 PLAN_PROMPT = """\
@@ -95,8 +99,15 @@ class Orchestrator:
         reply = runtimes.run_hermes(spec["profile"], prompt, toolsets=spec.get("toolsets", "todo"))
         return self._require_allowed_provider(agent, reply, ticket)
 
-    def _openclaw(self, agent: str, message: str, session: str, ticket: int | None = None) -> runtimes.AgentReply:
-        reply = runtimes.run_openclaw(self.team.agent(agent)["agent_id"], message, session=session)
+    def _openclaw(self, agent: str, message: str, session: str, ticket: int | None = None,
+                  max_turns: int | None = None, model: str | None = None) -> runtimes.AgentReply:
+        timeout = 900
+        if max_turns:
+            message += (f"\n\nBudget: about {max_turns} tool calls in total. Plan before acting, do not re-read "
+                        "files you have already read, and finish with your summary before the budget runs out.")
+            timeout = max(60, max_turns * SECONDS_PER_TURN)
+        reply = runtimes.run_openclaw(self.team.agent(agent)["agent_id"], message, session=session,
+                                      timeout_s=timeout, model=model)
         return self._require_allowed_provider(agent, reply, ticket)
 
     def _require_allowed_provider(self, agent: str, reply: runtimes.AgentReply, ticket: int | None) -> runtimes.AgentReply:
@@ -257,11 +268,11 @@ class Orchestrator:
         # other accounts never reaches the builder (it would be a prompt-injection channel).
         for c in reversed(self.gh.team_comments("dispatch", pr_number)):
             if (c["event"] or {}).get("outcome") in ("request_changes", "fail"):
-                return c["body"][:4000]
+                return c["body"][:MAX_FEEDBACK_CHARS]
         return ""
 
     # -- build ------------------------------------------------------------------------------
-    def build(self, ticket: int) -> int | None:
+    def build(self, ticket: int, max_turns: int | None = None) -> int | None:
         issue = self.gh.get_issue("builder", ticket)
         attempt = self._attempts(ticket) + 1
         if attempt > self.team.max_attempts:
@@ -284,11 +295,14 @@ class Orchestrator:
         reply = self._openclaw(
             "builder",
             BUILD_MESSAGE.format(ticket=ticket, attempt=attempt, max_attempts=self.team.max_attempts),
-            session=f"ticket-{ticket}-build-{attempt}", ticket=ticket,
+            session=f"ticket-{ticket}-build-{attempt}", ticket=ticket, max_turns=max_turns,
         )
         changed, outside = workspace.import_changes(ws / "repo", repo, self.team.allowed_paths)
         phase = self._phase("coding", attempt)
-        if not reply.ok or not changed:
+        # A run stopped by its turn budget may still have produced a usable change; the
+        # reviewer and tester gate it like any other commit.
+        budget_note = "" if reply.ok else f" (run ended early: {reply.error[:200]})"
+        if not changed:
             reason = reply.error if not reply.ok else "builder produced no changes under app/"
             self.gh.set_status_label("builder", ticket, "status:changes-requested")
             self._record(
@@ -303,7 +317,7 @@ class Orchestrator:
         message = (
             f"feat(#{ticket}): {issue['title']}\n\n{reply.text[:3000]}\n\n"
             f"Ticket: #{ticket}\nAgent: builder\nRuntime: OpenClaw\nModel: {model}\n"
-            f"Attempt: {attempt}\nSession: {reply.session}\n"
+            f"Attempt: {attempt}\nSession: {reply.session}\n" + (f"Note: {budget_note.strip()}\n" if budget_note else "")
         )
         workspace.git(repo, "-c", "user.name=builder (OpenClaw agent)", "-c", f"user.email={self.team.bot_email}",
                       "commit", "--quiet", "-m", message)
@@ -322,12 +336,14 @@ class Orchestrator:
         self.gh.set_status_label("builder", ticket, "status:in-review")
         body = (
             f"{self._header('builder', reply)} **builder → reviewer**: attempt {attempt} pushed to `{branch}` "
-            f"({len(changed)} files: {', '.join(f'`{c}`' for c in changed[:12])}). PR #{pr_number}.{ignored}"
+            f"({len(changed)} files: {', '.join(f'`{c}`' for c in changed[:12])}). PR #{pr_number}.{ignored}{budget_note}"
         )
         self._record(
             Event(event="build", agent="builder", runtime="openclaw", ticket=ticket, pr=pr_number, attempt=attempt,
                   phase=phase, outcome="handoff:reviewer", usage=reply.usage, duration_s=reply.duration_s,
-                  detail=json.dumps({"changed": changed, "outside": outside, "tools": reply.tools_used})),
+                  detail=json.dumps({"changed": changed, "outside": outside, "tools": reply.tools_used,
+                                     "turns": reply.usage.api_calls, "max_turns": max_turns,
+                                     "ended_early": not reply.ok})),
             comment_on=[ticket, pr_number], body=body,
         )
         return pr_number
@@ -390,7 +406,13 @@ class Orchestrator:
         return verdict["verdict"]
 
     # -- test -------------------------------------------------------------------------------
-    def test(self, ticket: int) -> str:
+    def test(self, ticket: int, focus: str | None = None, keep_existing: bool = False,
+             model: str | None = None, max_turns: int | None = None) -> str:
+        """Tester writes acceptance tests; the harness runs them offline and posts agent/test.
+
+        focus/keep_existing support a targeted re-test: the tester's previous acceptance file is
+        kept and the tester is asked to add only the tests described in `focus`.
+        """
         issue = self.gh.get_issue("tester", ticket)
         pr = self.gh.find_pr("tester", self._branch(ticket), open_only=True)
         if pr is None:
@@ -406,18 +428,31 @@ class Orchestrator:
         ws = config.WORK_DIR / "tester"
         workspace.export_tree(repo, ws / "repo")
         acc = ws / "acceptance"
+        seed = workspace.read_agent_file(ws, acc / "test_acceptance.py") if keep_existing else None
         if acc.is_symlink():
             acc.unlink()
         shutil.rmtree(acc, ignore_errors=True)
         acc.mkdir(parents=True)
+        if seed is not None:
+            workspace.safe_write(acc / "test_acceptance.py", seed.decode("utf-8", errors="replace"))
         workspace.safe_write(ws / "TICKET.md", render_ticket(issue, [], "", attempt))
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
-        reply = self._openclaw("tester", TEST_MESSAGE.format(pr=pr["number"], ticket=ticket),
-                               session=f"ticket-{ticket}-test-{attempt}", ticket=ticket)
+        message = TEST_MESSAGE.format(pr=pr["number"], ticket=ticket)
+        if focus:
+            message += ("\n\nTARGETED RE-TEST requested by the human engineer. "
+                        + ("acceptance/test_acceptance.py already contains your earlier tests: keep them and "
+                           "append new tests to the same file; do not rewrite existing tests. " if seed else "")
+                        + f"Add only these tests:\n{focus}\n"
+                        "Write tests that check the behaviour the ticket and these points require. If the "
+                        "implementation does not meet them, the tests must fail; do not weaken a test to make it pass.")
+        session = f"ticket-{ticket}-test-{attempt}" + ("-recheck" if focus else "")
+        reply = self._openclaw("tester", message, session=session, ticket=ticket, max_turns=max_turns, model=model)
         test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
-        if not reply.ok or test_bytes is None:
-            reason = reply.error or "tester wrote no acceptance/test_acceptance.py"
+        # A budget-stopped run still counts if it produced a new test file.
+        produced = test_bytes is not None and (seed is None or test_bytes != seed)
+        if not produced:
+            reason = reply.error or ("tester added no new tests" if seed else "tester wrote no acceptance/test_acceptance.py")
             self.gh.set_commit_status("tester", sha, "agent/test", "error", f"tester: {reason}"[:140])
             self._record(Event(event="test", agent="tester", runtime="openclaw", ticket=ticket, pr=pr["number"],
                                attempt=attempt, phase=self._phase("test", attempt), outcome="tester-error",
@@ -435,7 +470,10 @@ class Orchestrator:
         nxt = f"@{self.team.human_reviewer} (human merge)" if passed else "dispatch"
         body = (
             f"{self._header('tester', reply)} **tester → {nxt}**: {'PASS' if passed else 'FAIL'} on `{sha[:7]}` "
-            f"(pytest exit {rc}, offline container, builder tests + independent acceptance tests).\n\n"
+            f"(pytest exit {rc}, offline container, builder tests + independent acceptance tests)."
+            + (" Targeted re-test requested by the human engineer." if focus else "")
+            + (f" Tester run ended early: {reply.error[:200]}." if not reply.ok else "")
+            + f" Tester turns: {reply.usage.api_calls}" + (f" (budget ~{max_turns})" if max_turns else "") + ".\n\n"
             f"<details><summary>pytest output (tail)</summary>\n\n```\n{output[-6000:]}\n```\n</details>\n\n"
             f"<details><summary>acceptance/test_acceptance.py (written by tester)</summary>\n\n```python\n"
             f"{test_source[:12000]}\n```\n</details>"
@@ -444,7 +482,10 @@ class Orchestrator:
         self._record(
             Event(event="test", agent="tester", runtime="openclaw", ticket=ticket, pr=pr["number"], attempt=attempt,
                   phase=self._phase("test", attempt), outcome="pass" if passed else "fail", usage=reply.usage,
-                  duration_s=reply.duration_s, detail=f"pytest exit {rc}"),
+                  duration_s=reply.duration_s,
+                  detail=json.dumps({"pytest_exit": rc, "focus": bool(focus), "kept_existing": seed is not None,
+                                     "turns": reply.usage.api_calls, "max_turns": max_turns, "ended_early": not reply.ok,
+                                     "model_override": model})),
             comment_on=[pr["number"]], body=body,
         )
         return "pass" if passed else "fail"
@@ -536,7 +577,8 @@ def run_tests_offline(repo: Path, acceptance_source: str) -> tuple[int, str]:
             "--memory", "1g", "--cpus", "1", "--user", "1000:1000",
             "-v", f"{src}:/work:ro", "-v", f"{acc}:/acceptance:ro", "-w", "/work/app",
             "-e", "PYTHONPATH=/work/app", "-e", "NEWSROOM_DB=/tmp/newsroom-test.db",
-            config.TEST_IMAGE, "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", "/work/app",
+            config.TEST_IMAGE, "python", "-m", "pytest", "-q", "-rfE", "--tb=short", "-W", "ignore::DeprecationWarning",
+            "-p", "no:cacheprovider", "--rootdir", "/work/app",
             *targets,
         ]
         try:

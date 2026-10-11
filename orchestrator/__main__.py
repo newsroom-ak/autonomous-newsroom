@@ -25,8 +25,16 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("plan")
     sub.add_parser("assign")
-    for name in ("build", "review", "test"):
-        sub.add_parser(name).add_argument("ticket", type=int)
+    sub.add_parser("review").add_argument("ticket", type=int)
+    b = sub.add_parser("build")
+    b.add_argument("ticket", type=int)
+    b.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    t = sub.add_parser("test")
+    t.add_argument("ticket", type=int)
+    t.add_argument("--focus-file", help="file listing the only tests to add (targeted re-test)")
+    t.add_argument("--keep-existing", action="store_true", help="keep the tester's previous acceptance file")
+    t.add_argument("--model", help="one-run primary model override, e.g. ollama-cloud/gpt-oss:120b")
+    t.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
     sub.add_parser("step")
     r = sub.add_parser("run")
     r.add_argument("--max", type=int, default=20)
@@ -41,8 +49,14 @@ def main(argv: list[str] | None = None) -> int:
         print(orch.plan())
     elif args.cmd == "assign":
         print(orch.assign())
-    elif args.cmd in ("build", "review", "test"):
-        print(getattr(orch, args.cmd)(args.ticket))
+    elif args.cmd == "review":
+        print(orch.review(args.ticket))
+    elif args.cmd == "build":
+        print(orch.build(args.ticket, max_turns=args.max_turns))
+    elif args.cmd == "test":
+        focus = open(args.focus_file).read() if args.focus_file else None
+        print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
+                        max_turns=args.max_turns))
     elif args.cmd == "step":
         print(orch.step())
     elif args.cmd == "run":

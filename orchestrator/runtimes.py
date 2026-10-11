@@ -29,10 +29,12 @@ class AgentError(RuntimeError):
     pass
 
 
-def run_openclaw(agent_id: str, message: str, session: str | None = None, timeout_s: int = 900) -> AgentReply:
+def run_openclaw(agent_id: str, message: str, session: str | None = None, timeout_s: int = 900,
+                 model: str | None = None) -> AgentReply:
     """One agent turn through the local, token-authenticated OpenClaw gateway.
 
-    The agent's sandbox, tool policy and model fallbacks come from the OpenClaw profile config.
+    The agent's sandbox, tool policy and model fallbacks come from the OpenClaw profile config;
+    `model` overrides the primary model for this run only.
     """
     session = session or f"{agent_id}-{uuid.uuid4().hex[:8]}"
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
@@ -41,7 +43,8 @@ def run_openclaw(agent_id: str, message: str, session: str | None = None, timeou
     started = time.monotonic()
     proc = subprocess.run(
         [config.OPENCLAW_BIN, "--profile", config.OPENCLAW_PROFILE, "agent", "--agent", agent_id,
-         "--session-id", session, "--json", "--timeout", str(timeout_s), "--message-file", msg_path],
+         "--session-id", session, "--json", "--timeout", str(timeout_s), "--message-file", msg_path,
+         *(["--model", model] if model else [])],
         env=config.agent_env(), capture_output=True, text=True, timeout=timeout_s + 120,
     )
     Path(msg_path).unlink(missing_ok=True)

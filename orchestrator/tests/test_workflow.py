@@ -179,7 +179,7 @@ def _setup_build(env, monkeypatch, writes):
 
     monkeypatch.setattr(workflow, "push_branch", fake_push)
 
-    def fake_builder(agent_id, message, session=None, timeout_s=900):
+    def fake_builder(agent_id, message, session=None, timeout_s=900, model=None):
         ws = config.WORK_DIR / "builder"
         assert (ws / "TICKET.md").exists() and not (ws / "repo" / ".git").exists()
         for rel, content in writes.items():
@@ -445,3 +445,32 @@ def test_local_fallback_reply_is_refused(env, monkeypatch):
         orch.plan()
     assert fake.issues == {}
     assert ledger.read()[-1]["event"] == "provider-refused"
+
+
+def test_turn_budget_sets_deadline_and_prompt(env, monkeypatch):
+    orch, fake, _ = env
+    seen = {}
+
+    def fake_run(agent_id, message, session=None, timeout_s=900, model=None):
+        seen.update(timeout=timeout_s, message=message, model=model)
+        return reply("done")
+
+    monkeypatch.setattr(runtimes, "run_openclaw", fake_run)
+    orch._openclaw("tester", "write tests", session="s", max_turns=12, model="ollama-cloud/gpt-oss:120b")
+    assert seen["timeout"] == 12 * workflow.SECONDS_PER_TURN
+    assert "about 12 tool calls" in seen["message"] and seen["model"] == "ollama-cloud/gpt-oss:120b"
+
+
+def test_budget_stopped_build_with_changes_is_still_gated(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    original = runtimes.run_openclaw
+
+    def stopped(*a, **k):
+        r = original(*a, **k)
+        r.ok, r.error = False, "timeout"
+        return r
+
+    monkeypatch.setattr(runtimes, "run_openclaw", stopped)
+    pr = orch.build(1, max_turns=5)
+    assert pr is not None and "status:in-review" in fake.issues[1]["labels"]
+    assert "run ended early" in fake.issues[1]["comments"][-1]["body"]
