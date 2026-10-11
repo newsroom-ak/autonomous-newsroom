@@ -92,6 +92,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     monkeypatch.setattr(config, "LEDGER_FILE", tmp_path / "work" / "ledger.jsonl")
     monkeypatch.setattr(TEAM, "allowed_providers", [])  # fake replies use provider "p"
+    monkeypatch.setattr(workflow, "run_tests_offline", lambda repo, src=None: (0, "2 passed"))
+    monkeypatch.setattr(workflow.time, "sleep", lambda s: None)
     fake = FakeGitHub()
     orch = workflow.Orchestrator(team=TEAM, github=fake)
     return orch, fake, tmp_path
@@ -203,7 +205,7 @@ def test_build_commits_only_app_files_under_builder_identity(env, monkeypatch):
     author = subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%an|%B"], capture_output=True, text=True).stdout
     assert author.startswith("builder (OpenClaw agent)|") and "Agent: builder" in author and "Ticket: #1" in author
     assert (clone / "README.md").read_text() == "readme\n"
-    assert "status:in-review" in fake.issues[1]["labels"]
+    assert "status:in-test" in fake.issues[1]["labels"]
     assert ("builder", "create_pr") in fake.actions
     assert "README.md" in fake.issues[pr]["comments"][-1]["body"]  # outside writes are reported
 
@@ -269,7 +271,7 @@ def test_review_approval_hands_off_to_tester(env, monkeypatch):
     monkeypatch.setattr(runtimes, "run_hermes", lambda *a, **k: reply('{"verdict": "approve", "summary": "ok", "findings": []}'))
     assert orch.review(1) == "approve"
     assert ("reviewer", fake.prs["ticket/1"]["headRefOid"], "agent/review", "success") in fake.statuses
-    assert "status:in-test" in fake.issues[1]["labels"]
+    assert "status:ready-for-merge" in fake.issues[1]["labels"]
 
 
 def test_review_request_changes_without_findings_is_invalid():
@@ -472,5 +474,62 @@ def test_budget_stopped_build_with_changes_is_still_gated(env, monkeypatch):
 
     monkeypatch.setattr(runtimes, "run_openclaw", stopped)
     pr = orch.build(1, max_turns=5)
-    assert pr is not None and "status:in-review" in fake.issues[1]["labels"]
+    assert pr is not None and "status:in-test" in fake.issues[1]["labels"]
     assert "run ended early" in fake.issues[1]["comments"][-1]["body"]
+
+
+def test_publish_tests_attributes_tester_and_harness(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    sha = orch.publish_tests(1, "def test_x():\n    assert True\n", "ticket-1-test-1 (p/m)")
+    log = subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%an|%cn|%B"], capture_output=True, text=True).stdout
+    author, committer, body = log.split("|", 2)
+    assert author == "tester (OpenClaw agent)" and committer == workflow.PUBLISHER
+    assert "No model was called" in body and "Pushed-with: builder token" in body
+    assert (clone / "app/tests/acceptance/test_ticket_1.py").read_text().startswith("def test_x")
+    assert pushed[-1] == ("ticket/1", "builder") and fake.prs["ticket/1"]["headRefOid"] == sha
+    # publishing the same content again is a no-op
+    assert orch.publish_tests(1, "def test_x():\n    assert True\n", "again") == sha
+
+
+def test_builder_cannot_change_or_delete_tester_tests(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    orch.publish_tests(1, "def test_x():\n    assert True\n", "s")
+    acc = clone / "app/tests/acceptance/test_ticket_1.py"
+    ws_acc = config.WORK_DIR / "builder" / "repo" / "app/tests/acceptance/test_ticket_1.py"
+
+    def tampering_builder(agent_id, message, session=None, timeout_s=900, model=None):
+        ws_acc.parent.mkdir(parents=True, exist_ok=True)
+        ws_acc.write_text("def test_x():\n    pass  # weakened\n")
+        (config.WORK_DIR / "builder" / "repo" / "app" / "a.py").write_text("a = 2\n")
+        return reply("fixed")
+
+    monkeypatch.setattr(runtimes, "run_openclaw", tampering_builder)
+    fake.comment("tester", fake.prs["ticket/1"]["number"], "fail", event={"event": "test", "outcome": "fail"})
+    orch.build(1)
+    assert "weakened" not in acc.read_text()
+    assert "app/tests/acceptance/test_ticket_1.py" in fake.issues[1]["comments"][-1]["body"]
+
+
+def test_verify_is_deterministic_and_posts_on_head(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    sha = orch.publish_tests(1, "def test_x():\n    assert True\n", "s")
+    monkeypatch.setattr(runtimes, "run_openclaw", lambda *a, **k: pytest.fail("no model call allowed"))
+    monkeypatch.setattr(runtimes, "run_hermes", lambda *a, **k: pytest.fail("no model call allowed"))
+    assert orch.verify(1) == "pass"
+    assert ("tester", sha, "agent/test", "success") in fake.statuses
+    assert "status:in-review" in fake.issues[1]["labels"]
+    assert ledger.read()[-1]["usage"] is None
+
+
+def test_review_prompt_includes_committed_tests_and_results(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    orch.publish_tests(1, "def test_acceptance_marker():\n    assert True\n", "s")
+    prompts = []
+    monkeypatch.setattr(runtimes, "run_hermes", lambda p, prompt, **k: prompts.append(prompt) or reply(
+        '{"verdict": "approve", "summary": "ok", "findings": []}'))
+    orch.review(1)
+    assert "test_acceptance_marker" in prompts[0] and "pytest exit 0" in prompts[0]

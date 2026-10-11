@@ -40,12 +40,12 @@ flowchart LR
     D1 -->|creates issues<br/>status:todo| I[(GitHub Issues)]
     I -->|assign: deps merged| D2[dispatch]
     D2 -->|status:assigned<br/>comment dispatch→builder| B[builder<br/>OpenClaw sandbox]
-    B -->|commit as builder, push ticket/N,<br/>open PR, status:in-review| R[reviewer<br/>Hermes]
-    R -->|agent/review=failure<br/>status:changes-requested| D2
-    R -->|agent/review=success<br/>status:in-test| T[tester<br/>OpenClaw sandbox]
-    T -->|writes acceptance tests| X[offline pytest<br/>container]
+    B -->|commit as builder, push ticket/N,<br/>open PR, status:in-test| T[tester<br/>OpenClaw sandbox]
+    T -->|writes acceptance tests;<br/>harness commits them to the PR| X[offline pytest on<br/>the new PR head]
     X -->|agent/test=failure<br/>status:changes-requested| D2
-    X -->|agent/test=success<br/>status:ready-for-merge| H[human merges PR]
+    X -->|agent/test=success<br/>status:in-review| R[reviewer<br/>Hermes]
+    R -->|agent/review=failure<br/>status:changes-requested| D2
+    R -->|agent/review=success on the same commit<br/>status:ready-for-merge| H[human merges PR]
     H -->|Closes #N| I
     D2 -->|3 failed attempts| E[status:needs-human]
 ```
@@ -64,6 +64,8 @@ model and token count. The same event goes to `~/newsroom-work/ledger.jsonl`, wh
 | Rejected work goes back with the findings | Reviewer/tester set `status:changes-requested`; dispatch's next assignment quotes the findings; builder's `TICKET.md` includes them |
 | Retry limit | After `max_attempts` (3) builds, dispatch escalates with `status:needs-human` |
 | Builder can only change `app/` | Harness imports only regular files under `app/` from the agent's copy; other writes are reported in the handoff comment and dropped |
+| Builder cannot touch the tester's tests | Files under `app/tests/acceptance/` are never changed or deleted by a builder import; attempts are reported |
+| Tests are reproducible from the repo | The tester's acceptance file is committed to the PR (`app/tests/acceptance/test_ticket_<N>.py`) before the final test run and review |
 | Dispatch can only assign tickets whose dependencies are merged | Harness validates the choice; an invalid choice is logged and re-asked once, never silently replaced |
 | Tests run the code, not just read it | Builder tests + tester's acceptance tests run in `newsroom-test-runner` with `--network none`, read-only root, `cap-drop ALL`, no tokens |
 
@@ -78,10 +80,19 @@ chooses tickets, and never decides review or test outcomes:
 - the ticket list and every assignment come from `dispatch`'s reply;
 - every file under `app/` comes from `builder`'s or `tester`'s tool calls;
 - every `agent/review` status comes from `reviewer`'s JSON verdict;
-- every `agent/test` status is the exit code of pytest on the tester's and builder's tests.
+- every `agent/test` status is the exit code of pytest on the tester's and builder's tests as
+  committed on that exact PR head (`verify` re-runs them deterministically, without a model).
 
 The harness performs commits for the builder because the builder's sandbox has exec
-denied and no network (deliberately). Each commit records the agent, runtime, model,
+denied and no network (deliberately).
+
+**Credential boundary for test publication.** The tester's token is read-only for repository
+contents, by design: a gatekeeper that could push code could change what it judges. To commit
+the tester's acceptance file, the harness pushes with the *builder's* token. That commit is
+authored `tester (OpenClaw agent)`, committed by `newsroom-orchestrator (harness)`, says in its
+message that no model was called, and touches only `app/tests/acceptance/test_ticket_<N>.py`.
+The builder agent is not involved, and builder imports cannot modify that directory. All
+tokens belong to the same machine account, so GitHub itself cannot distinguish them. Each commit records the agent, runtime, model,
 attempt and OpenClaw session id in trailers, so it can be matched to the OpenClaw session log.
 
 ## Security notes

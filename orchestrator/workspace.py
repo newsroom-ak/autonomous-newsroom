@@ -133,26 +133,33 @@ def _regular_files(root: Path) -> dict[str, Path]:
     return files
 
 
-def import_changes(agent_tree: Path, repo: Path, allowed_paths: list[str]) -> tuple[list[str], list[str]]:
+def import_changes(agent_tree: Path, repo: Path, allowed_paths: list[str],
+                   protected: list[str] | None = None) -> tuple[list[str], list[str]]:
     """Mirror allowed paths from the agent's copy into the harness clone.
 
-    Returns (changed paths inside allowed area, paths the agent touched outside it, ignored).
+    Paths under `protected` (e.g. the tester's acceptance tests) are never changed or deleted.
+    Returns (changed paths inside the allowed area, ignored paths the agent touched outside it
+    or under a protected prefix).
     """
+    protected = protected or []
     if not contained(agent_tree.parent, agent_tree):
         raise RuntimeError(f"agent workspace {agent_tree} is a symlink; refusing to import")
     agent_files = _regular_files(agent_tree)
     repo_files = _regular_files(repo)
+    def is_protected(rel: str) -> bool:
+        return any(rel.startswith(x) for x in protected)
+
     outside = sorted(
         rel for rel, p in agent_files.items()
-        if not any(rel.startswith(a) for a in allowed_paths)
+        if (not any(rel.startswith(a) for a in allowed_paths) or is_protected(rel))
         and (rel not in repo_files or repo_files[rel].read_bytes() != p.read_bytes())
-    )
+    ) + sorted(rel for rel in repo_files if is_protected(rel) and rel not in agent_files)
     for prefix in allowed_paths:
         for rel, p in repo_files.items():
-            if rel.startswith(prefix) and rel not in agent_files:
+            if rel.startswith(prefix) and rel not in agent_files and not is_protected(rel):
                 p.unlink()
         for rel, p in agent_files.items():
-            if rel.startswith(prefix):
+            if rel.startswith(prefix) and not is_protected(rel):
                 data = read_agent_file(agent_tree, p)
                 if data is None:
                     continue

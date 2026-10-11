@@ -4,7 +4,11 @@
   assign            dispatch picks the next ticket for the builder
   build N           builder implements ticket N and opens/updates its PR
   review N          reviewer reviews ticket N's PR and sets agent/review
-  test N            tester writes acceptance tests; harness runs them offline; sets agent/test
+  test N            tester writes acceptance tests; harness commits them to the PR, runs all
+                    committed tests offline and sets agent/test (then review)
+  publish-tests N --from FILE --written-in TEXT
+                    commit an existing tester-written test file to the PR (no model call)
+  verify N          re-run the committed tests offline and set agent/test (no model call)
   step              advance the board by one agent action
   run [--max N]     repeat `step` until idle or N steps
   report            print the token & model report from the ledger
@@ -35,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--keep-existing", action="store_true", help="keep the tester's previous acceptance file")
     t.add_argument("--model", help="one-run primary model override, e.g. ollama-cloud/gpt-oss:120b")
     t.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    pt = sub.add_parser("publish-tests")
+    pt.add_argument("ticket", type=int)
+    pt.add_argument("--from", dest="source", required=True, help="tester-written test file to publish verbatim")
+    pt.add_argument("--written-in", required=True, help="tester session(s) and model that wrote the file")
+    sub.add_parser("verify").add_argument("ticket", type=int)
     sub.add_parser("step")
     r = sub.add_parser("run")
     r.add_argument("--max", type=int, default=20)
@@ -57,6 +66,10 @@ def main(argv: list[str] | None = None) -> int:
         focus = open(args.focus_file).read() if args.focus_file else None
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
                         max_turns=args.max_turns))
+    elif args.cmd == "publish-tests":
+        print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in))
+    elif args.cmd == "verify":
+        print(orch.verify(args.ticket))
     elif args.cmd == "step":
         print(orch.step())
     elif args.cmd == "run":
