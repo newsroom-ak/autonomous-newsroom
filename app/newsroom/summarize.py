@@ -109,26 +109,37 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     """
     prompt = f"Summarize the following article title in one short sentence (max 160 chars):\n{title}"
     # Primary attempt
+    # Primary model attempt ----------------------------------------------------
     try:
-        raw = _call_model(_get_primary_url(), _get_primary_key(), _get_primary_model(), prompt)
+        raw = _call_model(
+            _get_primary_url(),
+            _get_primary_key(),
+            _get_primary_model(),
+            prompt,
+        )
         summary = _clean_summary(raw)
         tag = _extract_tag(summary)
-        return summary, tag, "model", PRIMARY_MODEL
-    except httpx.HTTPStatusError as exc:
-        # Any HTTP error (including 402/429) triggers fallback per ticket.
-        pass
-    except httpx.RequestError:
-        # Network‑related error – trigger fallback.
+        # Successful primary call: source is "model" and we record the primary model name.
+        return summary, tag, "model", _get_primary_model()
+    except (httpx.HTTPStatusError, httpx.RequestError):
+        # Any HTTP error (including 402/429) or network‑related error triggers the fallback.
         pass
 
     # Fallback attempt – treat as a successful model generation.
+    # Fallback model attempt ---------------------------------------------------
     try:
-        raw = _call_model(_get_fallback_url(), _get_fallback_key(), _get_fallback_model(), prompt)
+        raw = _call_model(
+            _get_fallback_url(),
+            _get_fallback_key(),
+            _get_fallback_model(),
+            prompt,
+        )
         summary = _clean_summary(raw)
         tag = _extract_tag(summary)
+        # Successful fallback call still counts as a model‑generated summary.
         return summary, tag, "model", _get_fallback_model()
     except Exception:
-        # Both failed – use truncated title as a non‑model fallback.
+        # Both primary and fallback failed – use truncated title as a non‑model fallback.
         summary = title[:120]
         tag = "general"
         return summary, tag, "fallback", None
