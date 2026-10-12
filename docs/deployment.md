@@ -34,6 +34,18 @@ The only secret the app receives is `OLLAMA_API_KEY` (for article summaries), as
 variable of the container. The script refuses to start if the archived code contains
 secret-like strings.
 
+## Observed in the first live run (2026-10-12)
+
+- Against the real Google News feed and Ollama Cloud, the merged code stored 100 articles and
+  summarized 12 (the per-refresh cap): 11 model summaries, 1 title fallback, none empty.
+- **Slow first start:** the scheduler awaits its first refresh before the server begins to answer
+  (about 70 s), so the site is unreachable right after a restart until that refresh completes.
+- FastAPI's auto-generated `/docs`, `/redoc` and `/openapi.json` are reachable (they describe the two
+  read-only routes); there are no write endpoints.
+- Reasoning models sometimes use the whole 800-token budget on hidden reasoning and return empty
+  content; the app rejects those replies and falls back to the second model, then to the marked
+  title fallback.
+
 ## Reproduce
 
 Prerequisites: Docker, `cloudflared` (`brew install cloudflared`), a checkout of this

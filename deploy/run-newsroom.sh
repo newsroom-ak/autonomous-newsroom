@@ -42,7 +42,9 @@ OLLAMA_API_KEY="$KEY" docker run -d --name "$NAME" --restart unless-stopped \
   "$IMAGE" python -m uvicorn newsroom.main:app --host 0.0.0.0 --port 8000 >/dev/null
 unset KEY
 
-for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 1; done
+# The app runs its first refresh (feed + up to 12 model calls) before it starts answering, which
+# took about 70 s in the first live run; allow up to 5 minutes.
+for _ in $(seq 1 150); do curl -fsS "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 2; done
 curl -fsS "http://127.0.0.1:$PORT/" >/dev/null || { echo "app did not become healthy" >&2; docker logs "$NAME" | tail -20 >&2; exit 1; }
 echo "newsroom running locally on 127.0.0.1:$PORT (ref $(git rev-parse --short "$REF")); starting Quick Tunnel…"
 
