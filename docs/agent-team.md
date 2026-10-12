@@ -130,6 +130,25 @@ treats all of that as untrusted:
   baseline (sandbox all, network none, read-only root, cap-drop ALL, exec deny, elevated off,
   loopback token-auth gateway) has drifted.
 
+## Additions made while delivering tickets #5–#16
+
+Each came from a real failure (see `DELIVERY.md` and `docs/traces/`):
+
+- **Dispatch sees the full text** of each candidate ticket; acceptance criteria outrank dispatch's
+  own instructions in `TICKET.md`.
+- **Tester-owned edits to earlier acceptance files** are published with the new test file
+  (`--no-updates` restricts a run to the ticket's own file). The builder still cannot change them.
+- **`verify --smoke`** runs the existing committed tests before the tester has written any, so a
+  broken import is sent back to the builder without a model run.
+- **`build --exception/--scope/--task-file`**: one human-authorized attempt beyond the 3-attempt
+  limit, limited to chosen paths and a narrow task; the reason is recorded in the commit and on
+  the ticket.
+- **`file-ticket`**: a human-reported bug is created by the machine account with a disclosure
+  line; dispatch assigns it like any other ticket.
+- **Tool-call failures** reported by OpenClaw are recorded in the ledger and handoff comments.
+- **Known gap:** OpenClaw has no per-run limit on model requests, only a wall-clock deadline.
+  Runs that hit it can report very large token totals (see the token report in `DELIVERY.md`).
+
 ## Running it
 
 ```bash

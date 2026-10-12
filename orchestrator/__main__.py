@@ -42,13 +42,21 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--keep-existing", action="store_true", help="keep the tester's previous acceptance file")
     t.add_argument("--model", help="one-run primary model override, e.g. ollama-cloud/gpt-oss:120b")
     t.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    t.add_argument("--no-updates", action="store_true", help="publish only this ticket's test file")
     pt = sub.add_parser("publish-tests")
     pt.add_argument("ticket", type=int)
     pt.add_argument("--from", dest="source", required=True, help="tester-written test file to publish verbatim")
     pt.add_argument("--written-in", required=True, help="tester session(s) and model that wrote the file")
     pt.add_argument("--update", action="append", default=[], metavar="REL=FILE",
                     help="tester-written update to an earlier acceptance file, e.g. app/tests/acceptance/test_ticket_4.py=/path")
-    sub.add_parser("verify").add_argument("ticket", type=int)
+    v = sub.add_parser("verify")
+    v.add_argument("ticket", type=int)
+    v.add_argument("--smoke", action="store_true",
+                   help="run existing committed tests before the tester has written this ticket's tests")
+    ft = sub.add_parser("file-ticket")
+    ft.add_argument("--title", required=True)
+    ft.add_argument("--body-file", required=True)
+    ft.add_argument("--reported-by", required=True, help="the human who found and wrote the issue")
     sub.add_parser("step")
     r = sub.add_parser("run")
     r.add_argument("--max", type=int, default=20)
@@ -71,12 +79,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "test":
         focus = open(args.focus_file).read() if args.focus_file else None
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
-                        max_turns=args.max_turns))
+                        max_turns=args.max_turns, allow_updates=not args.no_updates))
     elif args.cmd == "publish-tests":
         updates = {rel: open(src).read() for rel, src in (u.split("=", 1) for u in args.update)}
         print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in, updates=updates))
     elif args.cmd == "verify":
-        print(orch.verify(args.ticket))
+        print(orch.verify(args.ticket, smoke=args.smoke))
+    elif args.cmd == "file-ticket":
+        print(orch.file_ticket(args.title, open(args.body_file).read(), args.reported_by))
     elif args.cmd == "step":
         print(orch.step())
     elif args.cmd == "run":
