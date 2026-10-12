@@ -1,7 +1,10 @@
 # Agent identity and merge gates
 
-Status: **design**. Each control below is marked as planned until a live test proves it;
-results will be recorded in `docs/traces/`.
+Status: **implemented and exercised**. The five GitHub-side permission tests passed
+(`docs/traces/permission-test.md`) and the six agent-authored PRs merged with both `agent/review` and
+`agent/test` posted by the reviewer and tester tokens (see `DELIVERY.md`). Rows below still say
+"planned" where a control was designed but not separately tested; the known limitations at the end of
+this file remain true.
 
 ## Accounts
 

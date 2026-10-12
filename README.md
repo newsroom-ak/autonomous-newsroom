@@ -13,3 +13,8 @@ A self-updating news application delivered by autonomous agents running on OpenC
 
 See `docs/agent-team.md` for the agent roster, ticket flow and how to run the team, and
 `docs/agent-identity.md` for agent identities, permissions, and merge gates.
+
+## Delivery report
+
+`DELIVERY.md` is the hand-over document: live URL, agent roster, ticket flow, what each agent did, what
+broke, the token and model report, trace excerpts, infrastructure notes, disclosures and how to reproduce.
