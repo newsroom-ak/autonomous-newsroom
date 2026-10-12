@@ -1,0 +1,57 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Newsroom – Latest Articles</title>
+    <style>
+        body {font-family:Arial,sans-serif;margin:0;padding:0;background:#f9f9f9;color:#333;}
+        header {background:#444;color:#fff;padding:1rem;text-align:center;}
+        .container {max-width:800px;margin:auto;padding:1rem;}
+        .article {background:#fff;margin:1rem 0;padding:1rem;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+        .title {font-size:1.2rem;font-weight:bold;margin-bottom:0.5rem;}
+        .summary {margin-bottom:0.5rem;}
+        .badge {display:inline-block;background:#007bff;color:#fff;padding:0.2rem 0.5rem;border-radius:3px;font-size:0.8rem;}
+        .fallback-label {font-style:italic;color:#555;}
+        .model-note {font-size:0.8rem;color:#777;}
+        a.source-link {color:#0066cc;word-break:break-all;}
+        @media (max-width:600px){.container{padding:0.5rem;}}
+    </style>
+</head>
+<body>
+<header>
+    <h1>Latest AI/ML News</h1>
+    {% if updated_ago %}
+        <p>Updated {{ updated_ago }}</p>
+    {% else %}
+        <p>No refresh data available</p>
+    {% endif %}
+</header>
+<div class="container">
+    {% if has_articles %}
+        {% for article in articles %}
+            <div class="article">
+                <div class="title">{{ article.title }}</div>
+                <div class="summary">
+                    {% if article.summary_source == "fallback" %}
+                        <span class="fallback-label">summary unavailable – showing headline</span>
+                    {% else %}
+                        {{ article.summary }}
+                        {% if article.summary_model %}
+                            <span class="model-note">(model: {{ article.summary_model }})</span>
+                        {% endif %}
+                    {% endif %}
+                </div>
+                <div class="badge">{{ article.topic_tag }}</div>
+                {% if article.source_url.startswith('http://') or article.source_url.startswith('https://') %}
+                    <div><a class="source-link" href="{{ article.source_url }}" rel="noopener noreferrer" target="_blank">Read source</a></div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <p>No articles yet.</p>
+    {% endif %}
+</div>
+</body>
+</html>

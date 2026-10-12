@@ -103,84 +103,85 @@ def _compute_updated_ago(last_refresh_iso: Optional[str], now_func: Callable[[],
     return _human_readable_delta(delta)
 
 
-@router.get("/api/articles")
-def get_articles() -> Dict[str, Any]:
-    """Return the article list JSON payload.
+# Helper used by both the JSON API and the server‑rendered homepage.
+def _fetch_articles_data(conn) -> tuple[List[Dict[str, Any]], Optional[str], Optional[str]]:
+    """Return ``(articles, last_refresh_iso, updated_ago)``.
 
-    ``updated_ago`` is computed using the current UTC time. The calculation is
-    performed via a helper that accepts an injectable ``now`` callable – this
-    function is used internally for deterministic testing and is **not**
-    exposed as a FastAPI query parameter.
+    * ``articles`` – up to 10 article dicts matching the API contract.
+    * ``last_refresh_iso`` – the raw ISO‑8601 timestamp from the latest successful
+      refresh, with a trailing ``Z`` to indicate UTC (or ``None`` if no refresh).
+    * ``updated_ago`` – a human‑readable relative time string derived from the same
+      timestamp, or ``None`` when unavailable.
     """
-    # Fetch articles that have a stored summary.
-    with db.get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT source_url, title, published_at, fetched_at, summary,
-                   topic_tag, summary_source, summary_model
-            FROM articles
-            WHERE summary IS NOT NULL
-            """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT source_url, title, published_at, fetched_at, summary,
+               topic_tag, summary_source, summary_model
+        FROM articles
+        WHERE summary IS NOT NULL
+        """
+    )
+    rows = cur.fetchall()
+
+    articles: List[Dict[str, Any]] = []
+    for (
+        source_url,
+        title,
+        published_at,
+        fetched_at,
+        summary,
+        topic_tag,
+        summary_source,
+        summary_model,
+    ) in rows:
+        parsed = _parse_datetime(published_at) or _parse_datetime(fetched_at)
+        articles.append(
+            {
+                "source_url": source_url,
+                "title": title,
+                "published_at": published_at,
+                "summary": summary,
+                "topic_tag": topic_tag,
+                "summary_source": summary_source,
+                "summary_model": summary_model,
+                "_sort_dt": parsed,
+            }
         )
-        rows = cur.fetchall()
+    # Newest first.
+    articles.sort(key=lambda a: a["_sort_dt"] or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
+    articles = articles[:10]
+    for a in articles:
+        a.pop("_sort_dt", None)
 
-        # Convert rows to dicts and sort.
-        articles: List[Dict[str, Any]] = []
-        for (
-            source_url,
-            title,
-            published_at,
-            fetched_at,
-            summary,
-            topic_tag,
-            summary_source,
-            summary_model,
-        ) in rows:
-            # Determine the datetime used for ordering.
-            parsed = _parse_datetime(published_at) or _parse_datetime(fetched_at)
-            articles.append(
-                {
-                    "source_url": source_url,
-                    "title": title,
-                    # Return the raw ``published_at`` string (or ``None``) as required by the API contract.
-                    "published_at": published_at,
-                    "summary": summary,
-                    "topic_tag": topic_tag,
-                    "summary_source": summary_source,
-                    "summary_model": summary_model,
-                    # Store the parsed datetime for sorting but do not expose it.
-                    "_sort_dt": parsed,
-                }
-            )
-        # Sort newest first using the computed datetime; fallback to epoch.
-        articles.sort(key=lambda a: a["_sort_dt"] or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
-        # Trim to the required limit.
-        articles = articles[:10]
-        # Remove the helper key before returning.
-        for a in articles:
-            a.pop("_sort_dt", None)
+    # Latest successful refresh.
+    cur.execute(
+        """
+        SELECT finished_at FROM refresh_runs
+        WHERE status = 'success' AND finished_at IS NOT NULL
+        ORDER BY finished_at DESC LIMIT 1
+        """
+    )
+    last_row = cur.fetchone()
+    last_refresh_iso: Optional[str] = last_row[0] if last_row else None
 
-        # Determine last successful refresh.
-        cur.execute(
-            """
-            SELECT finished_at FROM refresh_runs
-            WHERE status = 'success' AND finished_at IS NOT NULL
-            ORDER BY finished_at DESC LIMIT 1
-            """
-        )
-        last_row = cur.fetchone()
-        last_refresh_iso: Optional[str] = last_row[0] if last_row else None
-
-    # ``now`` is fetched here for testability.
-    updated_ago = _compute_updated_ago(last_refresh_iso, datetime.utcnow) if last_refresh_iso else None
-
-    # Append Z suffix to indicate UTC as required.
+    updated_ago: Optional[str] = None
     if last_refresh_iso:
-        # Ensure the string ends with Z; if it already has a timezone offset we replace it.
-        # Stored timestamps are naïve UTC, so we simply add Z.
+        updated_ago = _compute_updated_ago(last_refresh_iso, datetime.utcnow)
         last_refresh_iso = f"{last_refresh_iso}Z"
 
+    return articles, last_refresh_iso, updated_ago
+
+
+@router.get("/api/articles")
+def get_articles() -> Dict[str, Any]:
+    """Return the article list JSON payload for the public API.
+
+    Delegates to ``_fetch_articles_data`` to avoid code duplication with the
+    homepage route.
+    """
+    with db.get_connection() as conn:
+        articles, last_refresh_iso, updated_ago = _fetch_articles_data(conn)
     return {
         "articles": articles,
         "last_refresh": last_refresh_iso,
