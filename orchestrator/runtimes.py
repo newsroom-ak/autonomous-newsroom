@@ -23,6 +23,7 @@ class AgentReply:
     tools_used: list[str] = field(default_factory=list)
     session: str = ""
     error: str = ""
+    tool_failures: int = 0
 
 
 class AgentError(RuntimeError):
@@ -72,8 +73,10 @@ def parse_openclaw_result(data: dict, duration: float, session: str) -> AgentRep
     text = "\n".join(p.get("text") or "" for p in result.get("payloads") or []).strip()
     ok = data.get("status") == "ok"
     err = "" if ok else json.dumps(data.get("error") or data.get("summary"))[:800]
+    summary = (result.get("meta") or {}).get("toolSummary") or {}
     return AgentReply(text=text, usage=usage, duration_s=duration, ok=ok,
-                      tools_used=list(receipt.get("successfulToolNames") or []), session=session, error=err)
+                      tools_used=list(receipt.get("successfulToolNames") or []), session=session, error=err,
+                      tool_failures=int(summary.get("failures") or 0))
 
 
 def run_hermes(profile: str, prompt: str, toolsets: str = "todo", timeout_s: int = 900) -> AgentReply:

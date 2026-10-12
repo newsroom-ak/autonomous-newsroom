@@ -376,11 +376,13 @@ class Orchestrator:
         body = (
             f"{self._header('builder', reply)} **builder → tester**: attempt {attempt} pushed to `{branch}` "
             f"({len(changed)} files: {', '.join(f'`{c}`' for c in changed[:12])}). PR #{pr_number}.{ignored}{budget_note}"
+            + (f" Tool calls that failed during the run: {reply.tool_failures}." if reply.tool_failures else "")
         )
         self._record(
             Event(event="build", agent="builder", runtime="openclaw", ticket=ticket, pr=pr_number, attempt=attempt,
                   phase=phase, outcome="handoff:tester", usage=reply.usage, duration_s=reply.duration_s,
                   detail=json.dumps({"changed": changed, "outside": outside, "tools": reply.tools_used,
+                                     "tool_failures": reply.tool_failures,
                                      "turns": reply.usage.api_calls, "max_turns": max_turns,
                                      "ended_early": not reply.ok})),
             comment_on=[ticket, pr_number], body=body,
@@ -450,7 +452,7 @@ class Orchestrator:
 
     # -- test -------------------------------------------------------------------------------
     def test(self, ticket: int, focus: str | None = None, keep_existing: bool = False,
-             model: str | None = None, max_turns: int | None = None) -> str:
+             model: str | None = None, max_turns: int | None = None, allow_updates: bool = True) -> str:
         """Tester writes acceptance tests; the harness runs them offline and posts agent/test.
 
         focus/keep_existing support a targeted re-test: the tester's previous acceptance file is
@@ -525,7 +527,7 @@ class Orchestrator:
         # Tester-owned updates to earlier tickets' acceptance files (modifications only).
         updates: dict[str, str] = {}
         own = self._acceptance_path(ticket)
-        for p in sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")):
+        for p in (sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")) if allow_updates else []):
             rel = p.relative_to(repo).as_posix()
             if rel == own or p.is_symlink():
                 continue
@@ -594,7 +596,7 @@ class Orchestrator:
         return sha
 
     def verify(self, ticket: int, reply: runtimes.AgentReply | None = None, note: str = "",
-               detail: dict | None = None) -> str:
+               detail: dict | None = None, smoke: bool = False) -> str:
         """Run the committed tests (builder's + tester's) on the PR head offline and post agent/test.
 
         Without `reply` this is a deterministic re-run: no model is called.
@@ -609,21 +611,23 @@ class Orchestrator:
         if workspace.git(repo, "rev-parse", "HEAD").strip() != sha:
             raise RuntimeError(f"tester checkout does not match PR head {sha[:7]}")
         rel = self._acceptance_path(ticket)
-        if not (repo / rel).is_file():
+        if not (repo / rel).is_file() and not smoke:
             raise RuntimeError(f"{rel} is not committed on {sha[:7]}; publish the tester's tests first")
         rc, output = run_tests_offline(repo, None)
         passed = rc == 0
-        how = "committed tests" if reply is not None else "committed tests, deterministic re-run, no model call"
+        how = ("smoke run of the existing committed tests before tester tests exist, no model call" if smoke
+               else "committed tests" if reply is not None else "committed tests, deterministic re-run, no model call")
         self.gh.set_commit_status("tester", sha, "agent/test", "success" if passed else "failure",
                                   f"tester: pytest exit {rc} ({how})")
-        nxt = "reviewer" if passed else "dispatch"
+        nxt = ("tester" if smoke else "reviewer") if passed else "dispatch"
         header = self._header("tester", reply) if reply is not None else "**[tester · openclaw · harness re-run, no model call]**"
         body = (
             f"{header} **tester → {nxt}**: {'PASS' if passed else 'FAIL'} on `{sha[:7]}` (pytest exit {rc}, offline "
             f"container, {how}: builder tests + tester acceptance tests in `{rel}`).{(' ' + note) if note else ''}\n\n"
             f"<details><summary>pytest output (tail)</summary>\n\n```\n{output[-6000:]}\n```\n</details>"
         )
-        self.gh.set_status_label("tester", ticket, "status:in-review" if passed else "status:changes-requested")
+        self.gh.set_status_label("tester", ticket, ("status:in-test" if smoke else "status:in-review") if passed
+                                 else "status:changes-requested")
         self._record(
             Event(event="test", agent="tester", runtime="openclaw" if reply is not None else "harness", ticket=ticket,
                   pr=pr["number"], attempt=attempt, phase=self._phase("test", attempt),
@@ -633,6 +637,20 @@ class Orchestrator:
             comment_on=[pr["number"]], body=body,
         )
         return "pass" if passed else "fail"
+
+    def file_ticket(self, title: str, body: str, reported_by: str) -> int:
+        """Create a ticket on behalf of a human (e.g. a bug found in supervised live testing).
+
+        The issue is authored by the machine account (the harness only trusts bot-authored
+        tickets) but its first line says who reported it; dispatch still assigns it.
+        """
+        self.gh.ensure_labels("dispatch")
+        header = (f"> **Filed through the harness on behalf of {reported_by}** (the text below was written by "
+                  f"the human, not by dispatch). Dispatch assigns it like any other ticket.\n\n")
+        number = self.gh.create_issue("dispatch", title, header + body, ["ticket", "status:todo"])
+        ledger.append(Event(event="file-ticket", agent=reported_by, runtime="human", ticket=number,
+                            outcome="filed", detail=title))
+        return number
 
     # -- escalation / driver ----------------------------------------------------------------
     def escalate(self, ticket: int, reason: str) -> None:

@@ -290,9 +290,11 @@ def test_extract_json_handles_fences_and_prose():
 def test_parse_openclaw_result_reads_usage_and_tools():
     data = {"status": "ok", "result": {"payloads": [{"text": "DONE"}], "meta": {"agentMeta": {
         "usage": {"input": 20679, "output": 34, "total": 20713}, "assistantTurns": 2,
-        "terminalReceipt": {"effective": {"provider": "ollama", "model": "qwen2.5:7b"}, "successfulToolNames": ["write"]}}}}}
+        "terminalReceipt": {"effective": {"provider": "ollama", "model": "qwen2.5:7b"}, "successfulToolNames": ["write"]}},
+        "toolSummary": {"calls": 3, "failures": 2}}}}
     r = runtimes.parse_openclaw_result(data, 3.0, "s1")
     assert (r.ok, r.text, r.usage.total_tokens, r.usage.model, r.tools_used) == (True, "DONE", 20713, "qwen2.5:7b", ["write"])
+    assert r.tool_failures == 2
 
 
 def test_parse_hermes_result_failure_is_not_ok():
@@ -565,3 +567,24 @@ def test_exception_allows_one_extra_scoped_attempt(env, monkeypatch):
     assert (config.WORK_DIR / "builder" / "TICKET.md").read_text().count("fix only test_x") == 1
     fake.comment("builder", 1, "x", event={"event": "build"})
     assert orch.build(1, exception="again") is None  # only one extra attempt
+
+
+def test_smoke_verify_runs_before_tester_tests_exist(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    with pytest.raises(RuntimeError, match="publish the tester"):
+        orch.verify(1)
+    monkeypatch.setattr(workflow, "run_tests_offline", lambda repo, src=None: (2, "ImportError"))
+    assert orch.verify(1, smoke=True) == "fail"
+    assert fake.statuses[-1][2:] == ("agent/test", "failure")
+    assert "status:changes-requested" in fake.issues[1]["labels"]
+
+
+def test_file_ticket_is_bot_authored_labelled_and_disclosed(env):
+    orch, fake, _ = env
+    n = orch.file_ticket("Bug: feed redirect", "Depends on: none\n\n- [ ] follows redirects", "Ankita2525")
+    issue = fake.issues[n]
+    assert "ticket" in issue["labels"] and "status:todo" in issue["labels"]
+    assert "on behalf of Ankita2525" in issue["body"] and "written by the human" in issue["body"]
+    assert fake.actions[-1][0] == "dispatch"  # created with dispatch's token
+    assert ledger.read()[-1]["event"] == "file-ticket" and ledger.read()[-1]["agent"] == "Ankita2525"
