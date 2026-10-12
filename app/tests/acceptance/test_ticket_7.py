@@ -157,9 +157,11 @@ def test_homepage_renders_articles_and_header(monkeypatch):
         # Should render at most 10 articles.
         assert html.count('<div class="article">') == 10
         # Verify each article block contains expected pieces.
-        for i in range(10):
-            # Only check the first 10 (newest ones).
-            assert f"Title {i}" in html
+        # Expected 10 newest articles based on publication/fetched timestamps.
+        expected_ids = [1, 3, 5, 7, 9, 11, 0, 2, 4, 6]
+        for i in expected_ids:
+            # Full title element to avoid false positives with substrings.
+            assert f'<div class="title">Title {i}</div>' in html
             if i % 3 == 0:
                 # Fallback articles: headline and label, no stored summary.
                 assert "summary unavailable – showing headline" in html
@@ -171,6 +173,9 @@ def test_homepage_renders_articles_and_header(monkeypatch):
             assert f"tag{i}" in html
             # Source link must be present and safe.
             assert f'href="https://example.com/article{i}"' in html
+        # Ensure the two oldest articles are not rendered.
+        for i in [8, 10]:
+            assert f'<div class="title">Title {i}</div>' not in html
         # Compare header ``updated_ago`` with API payload for consistency.
         api_resp = client.get("/api/articles")
         assert api_resp.status_code == 200
