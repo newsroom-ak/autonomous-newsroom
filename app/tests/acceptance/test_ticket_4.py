@@ -179,7 +179,8 @@ class TestRefreshBehaviour:
         # Patch httpx.get to return the RSS response.
         import importlib, httpx
         monkeypatch.setattr(feed, "httpx", importlib.import_module("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0: Resp())
+        # Accept extra kwargs to match the real httpx.get signature.
+        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0, **kwargs: Resp())
 
         path, conn = _setup_temp_db()
         try:
@@ -294,7 +295,7 @@ class TestRefreshBehaviour:
         """Simulate connection errors and HTTP 500 responses; the refresh should record an error status."""
         import importlib, httpx
         # Scenario 1 – connection error.
-        def raise_connect(url, timeout=10.0):
+        def raise_connect(url, timeout=10.0, **kwargs):
             raise httpx.ConnectError("connection failed")
         monkeypatch.setattr(feed, "httpx", importlib.import_module("httpx"))
         monkeypatch.setattr(feed.httpx, "get", raise_connect)
@@ -316,7 +317,7 @@ class TestRefreshBehaviour:
             text = "Server error"
             def raise_for_status(self):
                 raise httpx.HTTPStatusError("500 Server Error", request=None, response=self)
-        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0: Resp500())
+        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0, **kwargs: Resp500())
         path2, conn2 = _setup_temp_db()
         try:
             # Refresh should not raise SystemExit on HTTP 500 errors.
