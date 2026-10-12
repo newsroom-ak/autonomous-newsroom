@@ -18,6 +18,7 @@ from .api import router as api_router, _fetch_articles_data
 from . import db
 # Scheduler for periodic refreshes (Ticket #8)
 from . import scheduler
+from contextlib import asynccontextmanager
 
 # Resolve the template directory relative to the package (not cwd).
 # The template directory is ``newsroom/templates`` relative to the ``app``
@@ -27,24 +28,22 @@ from . import scheduler
 # from a different path).
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
-# Reusable FastAPI app instance.
-app = FastAPI(title="Newsroom API")
-app.include_router(api_router)
-
 # ---------------------------------------------------------------------------
 # FastAPI lifespan integration for background refresh scheduler
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
-async def _startup() -> None:
-    """Start the refresh scheduler when the FastAPI app starts."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the scheduler on startup and shut it down on shutdown."""
     await scheduler.startup()
+    try:
+        yield
+    finally:
+        await scheduler.shutdown()
 
-
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    """Shutdown the refresh scheduler cleanly."""
-    await scheduler.shutdown()
+# Reusable FastAPI app instance with lifespan.
+app = FastAPI(title="Newsroom API", lifespan=lifespan)
+app.include_router(api_router)
 
 
 @app.get("/", response_class=HTMLResponse)
