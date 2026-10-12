@@ -638,6 +638,20 @@ class Orchestrator:
         )
         return "pass" if passed else "fail"
 
+    def file_ticket(self, title: str, body: str, reported_by: str) -> int:
+        """Create a ticket on behalf of a human (e.g. a bug found in supervised live testing).
+
+        The issue is authored by the machine account (the harness only trusts bot-authored
+        tickets) but its first line says who reported it; dispatch still assigns it.
+        """
+        self.gh.ensure_labels("dispatch")
+        header = (f"> **Filed through the harness on behalf of {reported_by}** (the text below was written by "
+                  f"the human, not by dispatch). Dispatch assigns it like any other ticket.\n\n")
+        number = self.gh.create_issue("dispatch", title, header + body, ["ticket", "status:todo"])
+        ledger.append(Event(event="file-ticket", agent=reported_by, runtime="human", ticket=number,
+                            outcome="filed", detail=title))
+        return number
+
     # -- escalation / driver ----------------------------------------------------------------
     def escalate(self, ticket: int, reason: str) -> None:
         self.gh.set_status_label("dispatch", ticket, "status:needs-human")

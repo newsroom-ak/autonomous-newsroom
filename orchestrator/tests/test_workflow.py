@@ -578,3 +578,13 @@ def test_smoke_verify_runs_before_tester_tests_exist(env, monkeypatch):
     assert orch.verify(1, smoke=True) == "fail"
     assert fake.statuses[-1][2:] == ("agent/test", "failure")
     assert "status:changes-requested" in fake.issues[1]["labels"]
+
+
+def test_file_ticket_is_bot_authored_labelled_and_disclosed(env):
+    orch, fake, _ = env
+    n = orch.file_ticket("Bug: feed redirect", "Depends on: none\n\n- [ ] follows redirects", "Ankita2525")
+    issue = fake.issues[n]
+    assert "ticket" in issue["labels"] and "status:todo" in issue["labels"]
+    assert "on behalf of Ankita2525" in issue["body"] and "written by the human" in issue["body"]
+    assert fake.actions[-1][0] == "dispatch"  # created with dispatch's token
+    assert ledger.read()[-1]["event"] == "file-ticket" and ledger.read()[-1]["agent"] == "Ankita2525"

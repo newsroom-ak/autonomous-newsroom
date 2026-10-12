@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("ticket", type=int)
     v.add_argument("--smoke", action="store_true",
                    help="run existing committed tests before the tester has written this ticket's tests")
+    ft = sub.add_parser("file-ticket")
+    ft.add_argument("--title", required=True)
+    ft.add_argument("--body-file", required=True)
+    ft.add_argument("--reported-by", required=True, help="the human who found and wrote the issue")
     sub.add_parser("step")
     r = sub.add_parser("run")
     r.add_argument("--max", type=int, default=20)
@@ -81,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in, updates=updates))
     elif args.cmd == "verify":
         print(orch.verify(args.ticket, smoke=args.smoke))
+    elif args.cmd == "file-ticket":
+        print(orch.file_ticket(args.title, open(args.body_file).read(), args.reported_by))
     elif args.cmd == "step":
         print(orch.step())
     elif args.cmd == "run":
