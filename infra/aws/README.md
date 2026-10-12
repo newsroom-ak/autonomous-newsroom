@@ -2,9 +2,9 @@
 
 Region: **`us-east-2` (Ohio).** AWS assigned the author's Free Plan project to Ohio and states that Oregon
 (`us-west-2`) is unavailable without upgrading the plan, which is not being done. The first draft targeted Oregon.
-Availability in Ohio was checked offline (see "Ohio checks" below); nothing has been created.
+Availability in Ohio was checked offline (see "Ohio checks" below) and then confirmed by a real apply.
 
-Status: **plan reviewed against the live Ohio account, not applied. No AWS VM exists.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
+Status: **deployed and verified (2026-10-12): 9 resources applied in Ohio, public app at https://3-13-197-253.sslip.io.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
 assessment's plan B is used: an AWS Free Plan account provisioned with Terraform. The Oracle files in
 `infra/` are untouched; this is a separate root module with its own state.
 
@@ -57,7 +57,7 @@ account (nothing here enables AWS Organizations, IAM Identity Center or an upgra
 - **`aws login --region us-west-2 --profile newsroom` failed** (browser: "Something went wrong"), and so did
   `aws login --remote`. Both attempts used **Oregon**, which AWS blocks for this project. Neither was retried.
 - **AWS CloudShell reported:** "Your account verification is in progress. This may take up to two days for new
-  accounts." **That restriction is unresolved**; it has not been re-checked since.
+  accounts." The message was not re-checked, but **it did not block `terraform apply`** in Ohio.
 - **`aws login --region us-east-2 --profile newsroom` succeeded** on the first attempt in Ohio, with no extra
   browser step, and returned temporary credentials for an `AccountFullAccessRole` session (not the
   least-privilege `newsroom-terraform` user). The Oregon failures are therefore best explained by the region
@@ -135,7 +135,7 @@ AWS states charges cannot be incurred and ineligible instance types are blocked 
 ```bash
 terraform output                             # url, ip, ssh command
 ssh -i ~/.ssh/confer_aws_ed25519 ubuntu@<ip> 'systemctl is-active newsroom caddy; \
-   git -C /opt/newsroom/src rev-parse HEAD; sudo tail -3 /var/log/newsroom-bootstrap.log'
+   sudo git -C /opt/newsroom/src rev-parse HEAD; sudo tail -3 /var/log/newsroom-bootstrap.log'
 curl -s -o /dev/null -w '%{http_code}\n' https://<hostname>/            # 200 (after ~2 minutes)
 curl -s https://<hostname>/api/articles | head -c 300                    # real articles, non-empty summaries
 curl -s -o /dev/null -w '%{http_code}\n' https://<hostname>/docs         # 404
@@ -186,5 +186,37 @@ corrected to `us-east-2`. Result:
   20 GB gp3 root volume, standard CPU credits), Elastic IP and association, key pair, security group with SSH
   (one /32), HTTP, HTTPS and egress rules. No other services.
 - The plan reads the default VPC and one default subnet; it creates no VPC, NAT gateway, load balancer or role.
-- The plan proves the configuration is accepted; it does not prove a launch will succeed (capacity, the pending
-  account verification, and Free Plan limits are only tested by apply).
+- A plan proves the configuration is accepted, not that a launch succeeds; the apply below did.
+
+## Apply result and verification (2026-10-12)
+
+- Two applies: the first created 8 of 9 resources and failed on the SSH rule (incident 1); the second, from a plan
+  showing exactly `1 to add, 0 to change, 0 to destroy`, added it. Afterwards `terraform state list` shows 9
+  resources, the instance and Elastic IP association kept their IDs, and a fresh plan shows no changes.
+- Instance running, status checks `ok`, cloud-init finished (about 93 s), `newsroom` and `caddy` enabled and active.
+- https://3-13-197-253.sslip.io: `/` and `/api/articles` 200, `/docs` 404, HTTP redirects (308), POST 405.
+- Model key installed over SSH (see "Secrets"); 12 articles carry model summaries (`gpt-oss:20b`, plus one from the
+  `nemotron-3-nano:30b` fallback), 12 are title fallbacks from the first key-less refresh. The key was not found in any
+  response, journal, `systemctl show` output or unit file (exact-match checks run on the VM).
+- **Reboot test (one `aws ec2 reboot-instances`, 2026-10-12):** requested 07:33:39Z; services active again within
+  about 20 s of boot; **HTTPS 200 again after 76 s**; same instance and Elastic IP; the database (100 articles, 100
+  distinct URLs, integrity ok) and the model key file (`root:newsroom` 0640, 57 characters) were intact; no errors in
+  the new boot's journal.
+- **Summary coverage:** latest 10 articles before the reboot: 6 model, 4 title fallbacks; after the reboot's startup
+  refresh: 8 model, 2 fallback. Whole database after the reboot: 23 model (22 `gpt-oss:20b`, 1 `nemotron-3-nano:30b`),
+  13 fallback, 64 not yet summarised. Links and dates of the latest 10 were valid and ordered, with no duplicates.
+- **Scheduled refresh: pending.** Runs 1-3 were startup refreshes; the first timer-driven run is due about 10:35 UTC
+  (180 minutes after run 3 finished). Check with `sudo python3` against `refresh_runs` in
+  `/var/lib/newsroom/newsroom.db` (read-only) and `journalctl -u newsroom`. Not triggered artificially.
+- Running as a temporary session of a full-access role; there is still no least-privilege Terraform identity and no
+  access key.
+
+## Terraform incidents (real, from the first apply)
+
+1. **Invalid rule description.** AWS rejected `SSH from the engineer's IP only` with `InvalidParameterValue: Invalid
+   rule description` (the apostrophe is not in the allowed set `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`). Fixed to `SSH from
+   engineer IP only`; the other four descriptions were checked against the same set.
+2. **Public IP drift forcing instance replacement.** With `associate_public_ip_address = false` the next plan wanted
+   to replace the instance (3 to add, 2 to destroy). The provider reports `true` whenever the network interface has a
+   public IP, including an Elastic IP. The config now states `true` (commented in `main.tf`), which matches reality
+   without `ignore_changes`; the plan then showed only the missing rule, and the apply left the instance in place.
