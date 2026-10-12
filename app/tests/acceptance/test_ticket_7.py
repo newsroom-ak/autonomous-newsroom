@@ -160,16 +160,17 @@ def test_homepage_renders_articles_and_header(monkeypatch):
         for i in range(10):
             # Only check the first 10 (newest ones).
             assert f"Title {i}" in html
-            assert f"Summary {i}" in html
+            if i % 3 == 0:
+                # Fallback articles: headline and label, no stored summary.
+                assert "summary unavailable – showing headline" in html
+                assert f"Summary {i}" not in html
+            else:
+                # Model articles retain stored summary and model note.
+                assert f"Summary {i}" in html
+                assert f"(model: model-{i})" in html
             assert f"tag{i}" in html
             # Source link must be present and safe.
             assert f'href="https://example.com/article{i}"' in html
-            if i % 3 == 0:
-                # Fallback summaries get the special label.
-                assert "summary unavailable – showing headline" in html
-            else:
-                # Model summaries show the model note if present.
-                assert f"(model: model-{i})" in html
         # Compare header ``updated_ago`` with API payload for consistency.
         api_resp = client.get("/api/articles")
         assert api_resp.status_code == 200
@@ -198,7 +199,7 @@ def test_homepage_escapes_html_and_filters_bad_links(monkeypatch):
         html = client.get("/").text
         # The raw HTML should be escaped – no literal <script> tags.
         assert "<script>" not in html
-        assert "&lt;script&gt;alert('title')&lt;/script&gt;" in html
+        assert "&lt;script&gt;alert(&#39;title&#39;)&lt;/script&gt;" in html
         # The malicious URL should not render a link element.
         assert "javascript:alert('xss')" not in html
         # The badge should contain escaped tag text.
