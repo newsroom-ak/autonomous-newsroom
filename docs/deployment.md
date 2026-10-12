@@ -11,6 +11,12 @@ local Terraform state is intentionally untouched and git-ignored.
 **Plan B (used): the application runs on the engineer's Mac, exposed with a Cloudflare Quick
 Tunnel**, the emergency fallback the assessment brief describes.
 
+> **Update (2026-10-12): the public app is now also deployed on AWS.** After this document was written, an AWS Free
+> Plan VM (EC2 `t3.small`, `us-east-2`) was provisioned with Terraform and serves https://3-13-197-253.sslip.io. It is the primary
+> deployment; the Cloudflare Quick Tunnel described here remains the fallback. See `infra/aws/README.md` for the
+> procedure and verification results and `DELIVERY.md` (section 6) for the full account. The agents still run on the
+> engineer's Mac.
+
 ### Limitations (disclosed)
 
 - The public `*.trycloudflare.com` URL **changes every time the tunnel restarts**; Quick Tunnels

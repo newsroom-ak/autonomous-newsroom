@@ -21,9 +21,9 @@ for this report. Where something is an estimate or an interpretation, it says so
 | Tickets flow through something inspectable; review and test can send work back | ✅ | GitHub issues #4–#8, #16; PRs #9, #11, #13, #14, #15, #17; [rejections](#5-what-broke-and-how-it-was-handled) |
 | Agents write the code; git history shows agent-authored commits | ✅ for `app/` | 30 agent commits on `main` (17 builder, 13 tester); [section 3](#3-what-each-agent-actually-did) |
 | Free stack: free VM provisioned with Terraform, free models | ✅ AWS / ❌ Oracle | A Terraform-provisioned VM exists on **AWS** (Free Plan, `t3.small`, Ohio; [section 6](#6-infrastructure-and-hosting)). Oracle Always Free **never created a VM** (confirmed host-capacity failure). The brief's `m7i-flex.large` was replaced by `t3.small` to stretch credit. Models: Ollama Cloud free plan only. |
-| Public URL that loads and does the core thing | ✅ with limits | Quick Tunnel; URL changes if the tunnel restarts; the Mac must stay on |
+| Public URL that loads and does the core thing | ✅ | **Primary: https://3-13-197-253.sslip.io** (AWS EC2 `t3.small`, Ohio, Terraform-provisioned, HTTPS; verified 2026-10-12, including a reboot test). **Fallback:** Cloudflare Quick Tunnel from the author's Mac (the URL changes if the tunnel restarts and the Mac must stay on) |
 | Page: ~10 articles, one-line summary, topic tag, source link, "updated X ago" | ✅ | Verified live: 10 articles, none empty, model-written summaries |
-| Scheduled refresh, stored in a database | ✅ | In-app scheduler (startup + every 180 min), SQLite. **Verified live:** the second refresh fired on its own exactly 180 minutes after the first ([section 8](#8-quality-gates-in-practice)) |
+| Scheduled refresh, stored in a database | ✅ Mac / ⏳ AWS pending | In-app scheduler (startup + every 180 min), SQLite. **Verified on the Mac deployment:** the second refresh fired on its own exactly 180 minutes after the first ([section 8](#8-quality-gates-in-practice)). **On the AWS VM it has not yet been observed:** its three refreshes so far were startup refreshes, and the first timer-driven one was due about 10:35 UTC on 2026-10-12 |
 | Summarize once, fall back to a second free model on 402/429 | ✅ | Verified live (HTTP 402 from `kimi-k3` triggers the fallback); title fallback is marked as such |
 | `agents/` with each agent's config, prompts and skills (secrets removed) | ✅ | Prompts, `agents/team.json`, and sanitized Hermes/OpenClaw snapshots with provenance in `agents/SNAPSHOT.md` |
 | Token and model report | ✅ | [Section 4](#4-token-and-model-report), including a cross-check against Hermes's own usage records |
@@ -419,11 +419,12 @@ written its tests to a path the harness did not expect.
 
 ## 9. Human involvement and disclosures
 
-**Administrative bypass merges.** PRs #2, #3, #10, #12 and #18 are human-written, have no `agent/*` statuses on
-their head commits (checked on GitHub), and were merged by `Ankita2525` through the ruleset's pull-request
-bypass, the only way to merge a PR with no `agent/*` statuses. PRs #19 and #20 are in the same position and
-need the same approval. All six agent-authored PRs (#9, #11, #13, #14, #15, #17) merged
-normally with both statuses green. Branch protection was never disabled.
+**Administrative bypass merges.** PRs #2, #3, #10, #12, #18 and #19–#23 are human-written (#19–#23 change only documentation, deployment
+scripts and `infra/aws/`, not `app/`), have no `agent/*` statuses on their head commits
+(checked on GitHub), and were merged by `Ankita2525` through the ruleset's pull-request bypass, the only way to merge
+a PR with no `agent/*` statuses. **The agent review and test checks did not run on these PRs and are not claimed to
+have passed.** All six agent-authored PRs (#9, #11, #13, #14, #15, #17) merged normally with both statuses green.
+Branch protection was never disabled.
 
 **Written by the human with Claude Code (AI assistance), not by the agents:** `orchestrator/` (the harness and
 its tests), `agents/` prompts and configuration, `scripts/`, `docker/test-runner/`, `deploy/`, `infra/`,

@@ -100,9 +100,9 @@ Checks performed inside the running container:
 
 | Path | Observed result |
 |---|---|
-| /Users/ankita/.ssh | NOT PRESENT |
-| /Users/ankita/.oci | NOT PRESENT |
-| /Users/ankita/.config/gh | NOT PRESENT |
+| ~/.ssh | NOT PRESENT |
+| ~/.oci | NOT PRESENT |
+| ~/.config/gh | NOT PRESENT |
 | /workspace/skills | PRESENT |
 
 These are targeted access checks, not proof that all possible
