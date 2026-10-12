@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pathlib import Path
 
 from .api import router as api_router, _fetch_articles_data
 from . import db
@@ -19,7 +20,10 @@ from . import db
 # Resolve the template directory relative to the package (not cwd).
 # The template directory is ``newsroom/templates`` relative to the ``app``
 # package root (the current working directory when the test suite runs).
-templates = Jinja2Templates(directory="newsroom/templates")
+# Resolve the template directory relative to this file's location so the app works
+# regardless of the current working directory (e.g., when running with `uvicorn`
+# from a different path).
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
 # Reusable FastAPI app instance.
 app = FastAPI(title="Newsroom API")
