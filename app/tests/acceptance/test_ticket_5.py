@@ -181,8 +181,10 @@ def test_fallback_on_primary_402(monkeypatch):
         )
         summary, tag, source, model = cur.fetchone()
         assert summary == "Fallback summary."
-        assert source == "fallback"
-        assert model is None
+        # Per updated acceptance criteria, a fallback model still counts as a "model" source
+        # and the name of the model used should be recorded.
+        assert source == "model"
+        assert model == "fallback-model"
         # Ensure fallback was indeed called.
         assert call_sequence == ["fallback"]
     finally:
@@ -255,6 +257,195 @@ def test_idempotent_summarisation(monkeypatch):
         cur.execute("SELECT summary FROM articles")
         second_summary = cur.fetchone()[0]
         assert second_summary == first_summary
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old_env)
+
+# ---------------------------------------------------------------------------
+# Additional product‑owner criteria tests (added per reviewer request)
+# ---------------------------------------------------------------------------
+
+def test_primary_429_triggers_fallback(monkeypatch):
+    """Primary returning 429 should cause fallback model call and record its name."""
+    db_path, conn, old_env = _setup_temp_db()
+    try:
+        _mock_feed_single("Primary 429 fallback test")
+
+        def fake_post(url, json, headers=None, timeout=None):
+            if "primary" in url:
+                # Simulate 429 HTTPStatusError
+                class Resp:
+                    status_code = 429
+
+                    def raise_for_status(self):
+                        raise __import__("httpx").HTTPStatusError(
+                            "429 Too Many Requests", request=None, response=self
+                        )
+
+                raise Resp().raise_for_status()
+            else:
+                class Resp:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self):
+                        return {"choices": [{"message": {"content": "Fallback from 429."}}]}
+
+                return Resp()
+
+        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
+        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
+        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
+        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
+
+        monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
+        monkeypatch.setattr(summarize.httpx, "post", fake_post)
+
+        refresh._run_refresh()
+
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT summary, summary_source, summary_model FROM articles"
+        )
+        summary, source, model = cur.fetchone()
+        assert summary == "Fallback from 429."
+        assert source == "model"
+        assert model == "fallback-model"
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old_env)
+
+
+def test_primary_timeout_triggers_fallback(monkeypatch):
+    """Primary raising a timeout exception should also use the fallback model."""
+    db_path, conn, old_env = _setup_temp_db()
+    try:
+        _mock_feed_single("Primary timeout fallback test")
+
+        def fake_post(url, json, headers=None, timeout=None):
+            if "primary" in url:
+                raise __import__("httpx").TimeoutException("timeout")
+            else:
+                class Resp:
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                    def json(self):
+                        return {"choices": [{"message": {"content": "Fallback from timeout."}}]}
+
+                return Resp()
+
+        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
+        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
+        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
+        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
+
+        monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
+        monkeypatch.setattr(summarize.httpx, "post", fake_post)
+
+        refresh._run_refresh()
+
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT summary, summary_source, summary_model FROM articles"
+        )
+        summary, source, model = cur.fetchone()
+        assert summary == "Fallback from timeout."
+        assert source == "model"
+        assert model == "fallback-model"
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old_env)
+
+
+def test_max_summaries_limit(monkeypatch):
+    """Setting NEWSROOM_MAX_SUMMARIES limits the number of model calls per refresh."""
+    db_path, conn, old_env = _setup_temp_db()
+    try:
+        # Create three articles with distinct URLs.
+        articles = []
+        for i in range(3):
+            articles.append({
+                "source_url": f"https://example.com/{i}",
+                "title": f"Article {i}",
+                "published_at": None,
+                "fetched_at": None,
+                "summary": None,
+                "topic_tag": None,
+            })
+        feed.fetch_articles = lambda: articles
+
+        call_counter = {"calls": 0}
+
+        def fake_post(url, json, headers=None, timeout=None):
+            call_counter["calls"] += 1
+            class Resp:
+                status_code = 200
+
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"choices": [{"message": {"content": f"Summary {json['model']}"}}]}
+
+            return Resp()
+
+        monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
+        monkeypatch.setattr(summarize.httpx, "post", fake_post)
+
+        # Set limit AFTER modules have been imported.
+        monkeypatch.setenv("NEWSROOM_MAX_SUMMARIES", "2")
+        import importlib
+        importlib.reload(summarize)
+
+        refresh._run_refresh()
+        # Only two model calls should have been made.
+        assert call_counter["calls"] == 2
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old_env)
+
+
+def test_resummarize_on_title_change(monkeypatch):
+    """Changing an article title triggers a re‑summarisation; unchanged title does not."""
+    db_path, conn, old_env = _setup_temp_db()
+    try:
+        url = "https://example.com/article"
+        # First fetch with title A.
+        _mock_feed_single("Title A", url)
+
+        call_counter = {"calls": 0}
+
+        def fake_post(url, json, headers=None, timeout=None):
+            call_counter["calls"] += 1
+            class Resp:
+                status_code = 200
+
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"choices": [{"message": {"content": "Summary A"}}]}
+
+            return Resp()
+
+        monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
+        monkeypatch.setattr(summarize.httpx, "post", fake_post)
+
+        # First refresh – creates article and summarises.
+        refresh._run_refresh()
+        # Second refresh with same title – should not invoke model again.
+        refresh._run_refresh()
+        assert call_counter["calls"] == 1
+
+        # Change title to B and refresh – should invoke model once more.
+        _mock_feed_single("Title B", url)
+        refresh._run_refresh()
+        assert call_counter["calls"] == 2
     finally:
         conn.close()
         _teardown_temp_db(db_path, old_env)
