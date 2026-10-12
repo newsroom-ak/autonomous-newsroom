@@ -272,16 +272,19 @@ or sandboxes.
 - **Region: Oregon proposed, Ohio required.** The original Terraform proposal targeted `us-west-2` (Oregon). AWS
   has since confirmed that the author's Free Plan project is assigned to `us-east-2` (Ohio), and the AWS Console
   states that `us-west-2` is unavailable without upgrading the plan (which the author has not done and does
-  not intend to do). The deployment region must therefore change to `us-east-2`. The proposal on
-  `infra/aws-plan-b` still names Oregon (its provider region, the region-restricted IAM policy and the AMI
-  lookup) and has **not yet been updated**. **No AWS VM has been provisioned.**
+  not intend to do). The deployment region therefore changed to `us-east-2`. The Terraform on the
+  infrastructure branch (`infra/aws/`) was updated accordingly (provider region, region-restricted IAM policy,
+  README); the Ubuntu AMI lookup is by name and resolves in any region. Ohio availability was checked offline
+  only: the `t3.small` price in Ohio ($0.0208/hr) and a Canonical Ubuntu 24.04 `hvm`/`ssd-gp3` AMI listing for
+  `us-east-2`. Whether this account can actually launch `t3.small` there is confirmed only by a credentialed
+  `terraform plan`/apply. **No AWS VM has been provisioned.**
 - **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB of memory; `m7i-flex.large`
   costs $0.0958/hr (about $70/month) so the $100 Free Plan credit would last about 40 days, after which the
   account closes, whereas `t3.small` lasts about 149 days. Both are Free-Plan eligible per AWS's documentation.
 - **What exists:** a Terraform proposal (one instance in the default VPC, one security group, one key pair, one
   Elastic IP, Caddy for HTTPS, systemd units, no IAM role, no secrets in Terraform) drafted and validated
-  offline, with its bootstrap rehearsed in a clean Ubuntu 24.04 container. It lives on a separate branch
-  (`infra/aws-plan-b`) and is **not part of this repository snapshot or this PR**. Nothing was applied.
+  offline, with its bootstrap rehearsed in a clean Ubuntu 24.04 container. It lives in `infra/aws/`
+  on a separate infrastructure branch (`infra/aws-plan-b`), not in the documentation PRs #19/#20. Nothing was applied.
 - **Where it stands:** the AWS Free Plan account is created and active, but **no AWS resource and no access key
   exists.** In the new AWS "Team" experience an IAM user cannot be given a console password; `aws login` and
   `aws login --remote` did not complete (the browser showed "Something went wrong" instead of the session
@@ -433,7 +436,7 @@ This is a Mac-based procedure; there is no one-command Linux install because no 
    **Agent configuration snapshots:** `python3 scripts/snapshot_agent_configs.py` regenerates them (sanitized).
 8. **Oracle (not completed):** `infra/` with `terraform.tfvars` from the example; expect the capacity error
    until Oracle has capacity in `us-sanjose-1` (check first with Oracle's compute capacity-report API).
-9. **AWS (proposed, not applied):** see the drafted Terraform on the `infra/aws-plan-b` branch; it needs an
+9. **AWS (proposed, not applied):** see `infra/aws/` (Ohio, `us-east-2`; separate infrastructure PR); it needs an
    AWS CLI session with EC2 rights, which was not available at hand-over.
 
 ---
