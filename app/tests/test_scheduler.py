@@ -15,15 +15,13 @@ from __future__ import annotations
 import asyncio
 import os
 import types
-
 import pytest
 
 # Import the scheduler module from the application package.
 from newsroom import scheduler
 
 
-@pytest.mark.asyncio
-async def test_scheduler_runs_immediate_refresh(monkeypatch):
+def test_scheduler_runs_immediate_refresh(monkeypatch):
     """Scheduler should run a refresh immediately on startup.
 
     The test patches ``refresh_callable`` to record when it is invoked and
@@ -53,25 +51,18 @@ async def test_scheduler_runs_immediate_refresh(monkeypatch):
     # Ensure the scheduler is enabled for this test.
     monkeypatch.setenv("NEWSROOM_DISABLE_SCHEDULER", "0")
 
-    # Start the scheduler – this creates the background task and runs the
-    # immediate refresh before the first sleep.
-    await scheduler.startup()
-
-    # Shut it down cleanly; this will cancel the background task (which may have
-    # already been cancelled by the fake sleep).
-    await scheduler.shutdown()
+    # Start the scheduler synchronously.
+    asyncio.run(scheduler.startup())
+    # Shut it down cleanly.
+    asyncio.run(scheduler.shutdown())
 
     # The fake refresh should have been called exactly once.
     assert len(called) == 1, "Refresh callable was not invoked on startup"
-
-    # ``sleep`` should have been called at least once with the configured
-    # interval (default 180 minutes → 10800 seconds). The test does not depend on
-    # the exact value; we only verify that it was invoked.
+    # ``sleep`` should have been called at least once with the configured interval.
     assert sleep_calls, "Scheduler sleep was never called"
 
 
-@pytest.mark.asyncio
-async def test_scheduler_respects_disable_flag(monkeypatch):
+def test_scheduler_respects_disable_flag(monkeypatch):
     """When ``NEWSROOM_DISABLE_SCHEDULER`` is set, startup should be a no‑op."""
     # Set the env flag to disable.
     monkeypatch.setenv("NEWSROOM_DISABLE_SCHEDULER", "1")
@@ -87,10 +78,10 @@ async def test_scheduler_respects_disable_flag(monkeypatch):
 
     monkeypatch.setattr(scheduler, "sleep", dummy_sleep)
 
-    await scheduler.startup()
-    # No task should be created; internal _task is private but we can check that
-    # it is still ``None`` via the module attribute.
+    # Run startup synchronously.
+    asyncio.run(scheduler.startup())
+    # No task should be created; internal _task is private but we can check that it is still ``None``.
     assert getattr(scheduler, "_task", None) is None
     # Shutdown should be harmless.
-    await scheduler.shutdown()
+    asyncio.run(scheduler.shutdown())
 

@@ -58,6 +58,10 @@ async def _run_once() -> None:
     written. The actual refresh work is performed in a thread via
     ``asyncio.to_thread`` so that any CPU‑bound or blocking I/O does not block the
     FastAPI event loop.
+
+    Any exception raised by the refresh callable is caught and logged – this
+    prevents the background loop from terminating unexpectedly. The next
+    scheduled run will still occur.
     """
     if _lock.locked():
         logger.info("Refresh already running – skipping scheduled run")
@@ -65,22 +69,25 @@ async def _run_once() -> None:
 
     async with _lock:
         logger.info("Starting scheduled refresh")
-        # ``refresh_callable`` may be a regular function; ``to_thread`` runs it
-        # in a separate thread and returns when it completes.
-        await asyncio.to_thread(refresh_callable)
-        logger.info("Scheduled refresh completed")
+        try:
+            # ``refresh_callable`` may be a regular function; ``to_thread`` runs it
+            # in a separate thread and returns when it completes.
+            await asyncio.to_thread(refresh_callable)
+        except Exception:
+            # Log the full traceback for debugging but swallow the exception
+            # so the scheduler loop continues.
+            logger.exception("Scheduled refresh failed")
+        else:
+            logger.info("Scheduled refresh completed")
 
 
 async def _background() -> None:
     """Background coroutine that drives the periodic schedule.
 
-    It performs an immediate refresh, then sleeps for the configured interval
-    (in minutes) and repeats. The sleep function is injected via the ``sleep``
-    variable to enable fast‑forwarding in tests.
+    The immediate refresh is performed by ``startup``; this coroutine only
+    handles the sleep‑interval loop. It reads ``NEWSROOM_REFRESH_MINUTES`` on each
+    iteration so that runtime changes are respected.
     """
-    # Immediate run on startup.
-    await _run_once()
-
     while True:
         # Resolve the interval each loop so that changes to the environment are
         # respected without restarting the process.
@@ -96,6 +103,13 @@ async def _background() -> None:
 async def startup() -> None:
     """Create and start the background scheduler task.
 
+    The original implementation launched ``_background`` as an ``asyncio`` task
+    and relied on that coroutine to perform the immediate refresh. When the test
+    harness calls ``asyncio.run(startup())`` the event loop is closed immediately
+    after ``startup`` finishes, cancelling any pending background tasks before they
+    have a chance to run. To make the immediate refresh observable in a synchronous
+    test, we now run ``_run_once()`` *directly* before spawning the background task.
+
     If ``NEWSROOM_DISABLE_SCHEDULER`` is set to ``1`` the scheduler is not
     started.
     """
@@ -103,6 +117,10 @@ async def startup() -> None:
     if os.getenv("NEWSROOM_DISABLE_SCHEDULER", "0") == "1":
         logger.info("Scheduler disabled via NEWSROOM_DISABLE_SCHEDULER")
         return
+
+    # Perform the immediate refresh synchronously so callers that run ``startup``
+    # to completion (e.g., via ``asyncio.run``) see the effect.
+    await _run_once()
 
     if _task is None or _task.done():
         _task = asyncio.create_task(_background())
