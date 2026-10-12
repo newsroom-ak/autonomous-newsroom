@@ -296,9 +296,24 @@ agent environment, and the brief's wish for the whole team on the VM is not met.
   of 1.9 GB used, disk 13%. After the key was installed the database held 12 model summaries (11 `gpt-oss:20b`, 1
   `nemotron-3-nano:30b`), 12 title fallbacks left over from the first, key-less refresh, and 76 articles not yet
   summarised (the app summarises a limited batch per refresh).
-- **Not yet verified on AWS:** the **180-minute scheduled refresh** (the first fire is due about 10:28 UTC on
-  2026-10-12; the same code was verified firing on its own on the Mac deployment, section 8); behaviour across a
-  **reboot** (no reboot was performed); capacity/uptime beyond the first hours.
+- **Reboot test (one controlled `reboot-instances`, instance never stopped or replaced; same instance ID and
+  Elastic IP afterwards).** Requested 07:33:39Z; the VM's boot time was 07:33:52Z; `newsroom` and Caddy were active
+  again by 07:33:58/59Z with no restarts counted; the app's startup refresh (run 3) finished 07:34:54Z, and
+  **HTTPS answered 200 again 76 seconds after the request** (the first ~55 s of that is the app's known slow
+  start). AWS status checks `ok/ok`. After the reboot: `/` and `/api/articles` 200, `/docs` 404, the same 100
+  articles with 100 distinct URLs and `integrity_check` ok, and the model key file unchanged (`root:newsroom` 0640,
+  57 characters). No errors or tracebacks in the journal of the new boot.
+- **Summary coverage.** Before the reboot, the latest 10 articles had valid links and parseable RFC 822 dates
+  (newest first, no duplicates) and 6 model summaries (`gpt-oss:20b`) versus 4 title fallbacks. After the reboot
+  (run 3 summarised more) the latest 10 were 8 model, 2 fallback; the whole database was 23 model summaries (22
+  `gpt-oss:20b`, 1 `nemotron-3-nano:30b`), 13 title fallbacks and 64 not yet summarised. Summaries are filled in a
+  limited batch per refresh, so coverage grows with later refreshes.
+- **Scheduled refresh: pending, not claimed.** Refresh runs 1-3 on the VM were all **startup** refreshes (first
+  boot, a manual service restart, the reboot). Nothing has yet fired from the 180-minute timer: the next one is due
+  about 10:35 UTC on 2026-10-12 (180 minutes after run 3 finished). The same code was seen firing exactly 180 minutes
+  after the previous run on the Mac deployment (section 8); it has not been observed on AWS. No refresh was
+  triggered artificially.
+- **Not yet verified on AWS:** the scheduled refresh above and uptime beyond the first hours.
 - **Exposure:** within minutes of going live an outside scanner requested `/.env`, `/config.json`, `/api/config`
   and similar paths; all returned 404.
 
@@ -476,8 +491,8 @@ The agents are a Mac-based procedure. The public app on a VM is reproducible wit
 - **800 completion tokens is marginal for reasoning models**; some articles fall back to the marked title.
 - **Hosting:** the URL changes if the tunnel restarts; the Mac must stay awake; no uptime guarantee.
 - **The VM hosts only the public app.** The agent environment is not reproduced on it, and Terraform ran with a
-  full-access AWS role from a temporary login, not the least-privilege user in the plan. The scheduled refresh and a
-  reboot are not yet verified on AWS.
+  full-access AWS role from a temporary login, not the least-privilege user in the plan. The scheduled refresh is not yet
+  verified on AWS (a reboot was).
 - **Token ledger gaps:** one OpenClaw run has no usage record, five Hermes verification sessions (19,007 tokens)
   are not in the ledger, and OpenClaw totals have no independent source (section 4).
 - **Builder's own `test_scheduler.py`** starts and stops the scheduler in separate event loops, so it checks less

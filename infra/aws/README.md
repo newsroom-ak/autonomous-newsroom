@@ -198,7 +198,16 @@ corrected to `us-east-2`. Result:
 - Model key installed over SSH (see "Secrets"); 12 articles carry model summaries (`gpt-oss:20b`, plus one from the
   `nemotron-3-nano:30b` fallback), 12 are title fallbacks from the first key-less refresh. The key was not found in any
   response, journal, `systemctl show` output or unit file (exact-match checks run on the VM).
-- **Not yet verified:** the 180-minute scheduled refresh on this VM, and behaviour after a reboot (none performed).
+- **Reboot test (one `aws ec2 reboot-instances`, 2026-10-12):** requested 07:33:39Z; services active again within
+  about 20 s of boot; **HTTPS 200 again after 76 s**; same instance and Elastic IP; the database (100 articles, 100
+  distinct URLs, integrity ok) and the model key file (`root:newsroom` 0640, 57 characters) were intact; no errors in
+  the new boot's journal.
+- **Summary coverage:** latest 10 articles before the reboot: 6 model, 4 title fallbacks; after the reboot's startup
+  refresh: 8 model, 2 fallback. Whole database after the reboot: 23 model (22 `gpt-oss:20b`, 1 `nemotron-3-nano:30b`),
+  13 fallback, 64 not yet summarised. Links and dates of the latest 10 were valid and ordered, with no duplicates.
+- **Scheduled refresh: pending.** Runs 1-3 were startup refreshes; the first timer-driven run is due about 10:35 UTC
+  (180 minutes after run 3 finished). Check with `sudo python3` against `refresh_runs` in
+  `/var/lib/newsroom/newsroom.db` (read-only) and `journalctl -u newsroom`. Not triggered artificially.
 - Running as a temporary session of a full-access role; there is still no least-privilege Terraform identity and no
   access key.
 
