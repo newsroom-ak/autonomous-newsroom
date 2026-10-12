@@ -594,7 +594,7 @@ class Orchestrator:
         return sha
 
     def verify(self, ticket: int, reply: runtimes.AgentReply | None = None, note: str = "",
-               detail: dict | None = None) -> str:
+               detail: dict | None = None, smoke: bool = False) -> str:
         """Run the committed tests (builder's + tester's) on the PR head offline and post agent/test.
 
         Without `reply` this is a deterministic re-run: no model is called.
@@ -609,21 +609,23 @@ class Orchestrator:
         if workspace.git(repo, "rev-parse", "HEAD").strip() != sha:
             raise RuntimeError(f"tester checkout does not match PR head {sha[:7]}")
         rel = self._acceptance_path(ticket)
-        if not (repo / rel).is_file():
+        if not (repo / rel).is_file() and not smoke:
             raise RuntimeError(f"{rel} is not committed on {sha[:7]}; publish the tester's tests first")
         rc, output = run_tests_offline(repo, None)
         passed = rc == 0
-        how = "committed tests" if reply is not None else "committed tests, deterministic re-run, no model call"
+        how = ("smoke run of the existing committed tests before tester tests exist, no model call" if smoke
+               else "committed tests" if reply is not None else "committed tests, deterministic re-run, no model call")
         self.gh.set_commit_status("tester", sha, "agent/test", "success" if passed else "failure",
                                   f"tester: pytest exit {rc} ({how})")
-        nxt = "reviewer" if passed else "dispatch"
+        nxt = ("tester" if smoke else "reviewer") if passed else "dispatch"
         header = self._header("tester", reply) if reply is not None else "**[tester · openclaw · harness re-run, no model call]**"
         body = (
             f"{header} **tester → {nxt}**: {'PASS' if passed else 'FAIL'} on `{sha[:7]}` (pytest exit {rc}, offline "
             f"container, {how}: builder tests + tester acceptance tests in `{rel}`).{(' ' + note) if note else ''}\n\n"
             f"<details><summary>pytest output (tail)</summary>\n\n```\n{output[-6000:]}\n```\n</details>"
         )
-        self.gh.set_status_label("tester", ticket, "status:in-review" if passed else "status:changes-requested")
+        self.gh.set_status_label("tester", ticket, ("status:in-test" if smoke else "status:in-review") if passed
+                                 else "status:changes-requested")
         self._record(
             Event(event="test", agent="tester", runtime="openclaw" if reply is not None else "harness", ticket=ticket,
                   pr=pr["number"], attempt=attempt, phase=self._phase("test", attempt),

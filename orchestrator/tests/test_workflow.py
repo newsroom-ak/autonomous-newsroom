@@ -565,3 +565,14 @@ def test_exception_allows_one_extra_scoped_attempt(env, monkeypatch):
     assert (config.WORK_DIR / "builder" / "TICKET.md").read_text().count("fix only test_x") == 1
     fake.comment("builder", 1, "x", event={"event": "build"})
     assert orch.build(1, exception="again") is None  # only one extra attempt
+
+
+def test_smoke_verify_runs_before_tester_tests_exist(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    with pytest.raises(RuntimeError, match="publish the tester"):
+        orch.verify(1)
+    monkeypatch.setattr(workflow, "run_tests_offline", lambda repo, src=None: (2, "ImportError"))
+    assert orch.verify(1, smoke=True) == "fail"
+    assert fake.statuses[-1][2:] == ("agent/test", "failure")
+    assert "status:changes-requested" in fake.issues[1]["labels"]
