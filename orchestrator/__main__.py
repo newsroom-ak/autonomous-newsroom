@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--keep-existing", action="store_true", help="keep the tester's previous acceptance file")
     t.add_argument("--model", help="one-run primary model override, e.g. ollama-cloud/gpt-oss:120b")
     t.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    t.add_argument("--no-updates", action="store_true", help="publish only this ticket's test file")
     pt = sub.add_parser("publish-tests")
     pt.add_argument("ticket", type=int)
     pt.add_argument("--from", dest="source", required=True, help="tester-written test file to publish verbatim")
@@ -74,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "test":
         focus = open(args.focus_file).read() if args.focus_file else None
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
-                        max_turns=args.max_turns))
+                        max_turns=args.max_turns, allow_updates=not args.no_updates))
     elif args.cmd == "publish-tests":
         updates = {rel: open(src).read() for rel, src in (u.split("=", 1) for u in args.update)}
         print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in, updates=updates))

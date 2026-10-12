@@ -452,7 +452,7 @@ class Orchestrator:
 
     # -- test -------------------------------------------------------------------------------
     def test(self, ticket: int, focus: str | None = None, keep_existing: bool = False,
-             model: str | None = None, max_turns: int | None = None) -> str:
+             model: str | None = None, max_turns: int | None = None, allow_updates: bool = True) -> str:
         """Tester writes acceptance tests; the harness runs them offline and posts agent/test.
 
         focus/keep_existing support a targeted re-test: the tester's previous acceptance file is
@@ -527,7 +527,7 @@ class Orchestrator:
         # Tester-owned updates to earlier tickets' acceptance files (modifications only).
         updates: dict[str, str] = {}
         own = self._acceptance_path(ticket)
-        for p in sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")):
+        for p in (sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")) if allow_updates else []):
             rel = p.relative_to(repo).as_posix()
             if rel == own or p.is_symlink():
                 continue
