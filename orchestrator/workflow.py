@@ -376,11 +376,13 @@ class Orchestrator:
         body = (
             f"{self._header('builder', reply)} **builder → tester**: attempt {attempt} pushed to `{branch}` "
             f"({len(changed)} files: {', '.join(f'`{c}`' for c in changed[:12])}). PR #{pr_number}.{ignored}{budget_note}"
+            + (f" Tool calls that failed during the run: {reply.tool_failures}." if reply.tool_failures else "")
         )
         self._record(
             Event(event="build", agent="builder", runtime="openclaw", ticket=ticket, pr=pr_number, attempt=attempt,
                   phase=phase, outcome="handoff:tester", usage=reply.usage, duration_s=reply.duration_s,
                   detail=json.dumps({"changed": changed, "outside": outside, "tools": reply.tools_used,
+                                     "tool_failures": reply.tool_failures,
                                      "turns": reply.usage.api_calls, "max_turns": max_turns,
                                      "ended_early": not reply.ok})),
             comment_on=[ticket, pr_number], body=body,

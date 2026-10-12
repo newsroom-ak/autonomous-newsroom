@@ -290,9 +290,11 @@ def test_extract_json_handles_fences_and_prose():
 def test_parse_openclaw_result_reads_usage_and_tools():
     data = {"status": "ok", "result": {"payloads": [{"text": "DONE"}], "meta": {"agentMeta": {
         "usage": {"input": 20679, "output": 34, "total": 20713}, "assistantTurns": 2,
-        "terminalReceipt": {"effective": {"provider": "ollama", "model": "qwen2.5:7b"}, "successfulToolNames": ["write"]}}}}}
+        "terminalReceipt": {"effective": {"provider": "ollama", "model": "qwen2.5:7b"}, "successfulToolNames": ["write"]}},
+        "toolSummary": {"calls": 3, "failures": 2}}}}
     r = runtimes.parse_openclaw_result(data, 3.0, "s1")
     assert (r.ok, r.text, r.usage.total_tokens, r.usage.model, r.tools_used) == (True, "DONE", 20713, "qwen2.5:7b", ["write"])
+    assert r.tool_failures == 2
 
 
 def test_parse_hermes_result_failure_is_not_ok():
