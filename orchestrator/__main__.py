@@ -33,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("build")
     b.add_argument("ticket", type=int)
     b.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    b.add_argument("--exception", help="human-authorized reason for one attempt beyond max_attempts")
+    b.add_argument("--scope", action="append", help="only import these paths from the builder (repeatable)")
+    b.add_argument("--task-file", help="narrow task that replaces the full ticket in TICKET.md")
     t = sub.add_parser("test")
     t.add_argument("ticket", type=int)
     t.add_argument("--focus-file", help="file listing the only tests to add (targeted re-test)")
@@ -43,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("ticket", type=int)
     pt.add_argument("--from", dest="source", required=True, help="tester-written test file to publish verbatim")
     pt.add_argument("--written-in", required=True, help="tester session(s) and model that wrote the file")
+    pt.add_argument("--update", action="append", default=[], metavar="REL=FILE",
+                    help="tester-written update to an earlier acceptance file, e.g. app/tests/acceptance/test_ticket_4.py=/path")
     sub.add_parser("verify").add_argument("ticket", type=int)
     sub.add_parser("step")
     r = sub.add_parser("run")
@@ -61,13 +66,15 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "review":
         print(orch.review(args.ticket))
     elif args.cmd == "build":
-        print(orch.build(args.ticket, max_turns=args.max_turns))
+        print(orch.build(args.ticket, max_turns=args.max_turns, exception=args.exception, scope=args.scope,
+                         task=open(args.task_file).read() if args.task_file else None))
     elif args.cmd == "test":
         focus = open(args.focus_file).read() if args.focus_file else None
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
                         max_turns=args.max_turns))
     elif args.cmd == "publish-tests":
-        print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in))
+        updates = {rel: open(src).read() for rel, src in (u.split("=", 1) for u in args.update)}
+        print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in, updates=updates))
     elif args.cmd == "verify":
         print(orch.verify(args.ticket))
     elif args.cmd == "step":

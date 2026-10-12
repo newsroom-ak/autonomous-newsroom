@@ -25,7 +25,7 @@ MAX_DIFF_CHARS = 60_000
 MAX_FEEDBACK_CHARS = 16_000
 # OpenClaw has no per-run turn limit, so a turn budget is enforced approximately: the agent is
 # told its budget and the run gets a wall-clock deadline of SECONDS_PER_TURN per budgeted turn.
-SECONDS_PER_TURN = 10
+SECONDS_PER_TURN = 6
 # Tester-written acceptance tests are committed here, one file per ticket. The builder may not
 # change or delete them (enforced when importing the builder's files).
 ACCEPTANCE_DIR = "app/tests/acceptance/"
@@ -56,12 +56,18 @@ You are assigning the next ticket to the builder agent.
 Board (only tickets whose dependencies are merged are listed as candidates):
 {board}
 
+Full text of each candidate ticket (its acceptance criteria are binding):
+{details}
+
 Feedback on candidates that were sent back by review or test:
 {feedback}
 
 Return ONLY a JSON object:
 {{"ticket": <issue number from the candidates>, "reason": "<one sentence>",
   "instructions": ["<what the builder must do or fix, at most 5 bullet points>"]}}
+
+Instructions must be consistent with the chosen ticket's acceptance criteria and file list.
+Do not invent requirements, file paths or providers that the ticket does not state.
 """
 
 REVIEW_PROMPT = """\
@@ -95,7 +101,12 @@ with your summary.
 
 TEST_MESSAGE = """\
 New handoff from reviewer: pull request #{pr} for ticket #{ticket} passed review.
-Read TICKET.md, read the implementation under repo/app/, and write acceptance/test_acceptance.py.
+Read TICKET.md, read the implementation under repo/app/, and write your new tests to the file
+acceptance/test_acceptance.py at the top of your workspace (NOT inside repo/).
+Earlier tickets' acceptance tests are in repo/app/tests/acceptance/. If one of them fails only because
+this ticket legitimately extends behaviour (for example, it adds database columns), you may minimally
+update that file in place so it still checks its own ticket's acceptance criteria. Never weaken a real
+requirement, and list any such change in your reply.
 """
 
 
@@ -226,7 +237,8 @@ class Orchestrator:
             for t in tickets if t["state"] == "OPEN"
         )
         feedback = self._feedback_for(candidates)
-        prompt = ASSIGN_PROMPT.format(board=board, feedback=feedback or "none")
+        details = "\n\n".join(f"#{t['number']}: {t['title']}\n{(t.get('body') or '')[:4000]}" for t in candidates)
+        prompt = ASSIGN_PROMPT.format(board=board, details=details, feedback=feedback or "none")
         valid = {t["number"] for t in candidates}
         for ask in range(2):
             reply = self._hermes("dispatch", prompt)
@@ -283,11 +295,21 @@ class Orchestrator:
         return ""
 
     # -- build ------------------------------------------------------------------------------
-    def build(self, ticket: int, max_turns: int | None = None) -> int | None:
+    def build(self, ticket: int, max_turns: int | None = None, exception: str | None = None,
+              scope: list[str] | None = None, task: str | None = None) -> int | None:
+        """Builder implements (or repairs) a ticket.
+
+        exception: a human-authorized reason for exactly one attempt beyond max_attempts.
+        scope: restrict which paths are imported from the builder (default: allowed_paths).
+        task: replace the full ticket in TICKET.md with a narrowly scoped task.
+        """
         issue = self.gh.get_issue("builder", ticket)
         attempt = self._attempts(ticket) + 1
-        if attempt > self.team.max_attempts:
+        if attempt > self.team.max_attempts + (1 if exception else 0):
             return self.escalate(ticket, f"builder exhausted {self.team.max_attempts} attempts")
+        if attempt > self.team.max_attempts:
+            ledger.append(Event(event="exception-authorized", agent="human", runtime="human", ticket=ticket,
+                                attempt=attempt, outcome="extra-attempt", detail=exception))
         branch = self._branch(ticket)
         repo = workspace.harness_clone(self.team, "builder", "builder")
         start = f"origin/{branch}" if workspace.remote_branch_exists(repo, branch) else f"origin/{self.team.base_branch}"
@@ -300,7 +322,10 @@ class Orchestrator:
         if attempt > 1 and pr:
             feedback = self._latest_rejection_text(pr["number"])
         instructions = self._latest_assign_instructions(ticket)
-        workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
+        if task:
+            workspace.safe_write(ws / "TICKET.md", f"# Ticket #{ticket}: {issue['title']} (scoped repair, attempt {attempt})\n\n{task}\n")
+        else:
+            workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
         reply = self._openclaw(
@@ -308,7 +333,7 @@ class Orchestrator:
             BUILD_MESSAGE.format(ticket=ticket, attempt=attempt, max_attempts=self.team.max_attempts),
             session=f"ticket-{ticket}-build-{attempt}", ticket=ticket, max_turns=max_turns,
         )
-        changed, outside = workspace.import_changes(ws / "repo", repo, self.team.allowed_paths,
+        changed, outside = workspace.import_changes(ws / "repo", repo, scope or self.team.allowed_paths,
                                                     protected=[ACCEPTANCE_DIR])
         phase = self._phase("coding", attempt)
         # A run stopped by its turn budget may still have produced a usable change; the
@@ -330,6 +355,8 @@ class Orchestrator:
             f"feat(#{ticket}): {issue['title']}\n\n{reply.text[:3000]}\n\n"
             f"Ticket: #{ticket}\nAgent: builder\nRuntime: OpenClaw\nModel: {model}\n"
             f"Attempt: {attempt}\nSession: {reply.session}\n" + (f"Note: {budget_note.strip()}\n" if budget_note else "")
+            + (f"Exception: human-authorized attempt beyond the {self.team.max_attempts}-attempt limit\n" if exception else "")
+            + (f"Scope: {', '.join(scope)}\n" if scope else "")
         )
         workspace.git(repo, "-c", "user.name=builder (OpenClaw agent)", "-c", f"user.email={self.team.bot_email}",
                       "commit", "--quiet", "-m", message)
@@ -473,6 +500,12 @@ class Orchestrator:
         session = f"ticket-{ticket}-test-{attempt}" + ("-recheck" if focus else "")
         reply = self._openclaw("tester", message, session=session, ticket=ticket, max_turns=max_turns, model=model)
         test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
+        misplaced = ws / "repo" / ACCEPTANCE_DIR / "test_acceptance.py"
+        if test_bytes is None and misplaced.is_file():
+            # Seen on ticket #5: the tester wrote its new file next to the earlier acceptance tests.
+            test_bytes = workspace.read_agent_file(ws, misplaced)
+            ledger.append(Event(event="test-file-location", agent="tester", runtime="harness", ticket=ticket,
+                                outcome="misplaced", detail=f"used {misplaced.relative_to(ws)}"))
         # A budget-stopped run still counts if it produced a new test file. In a plain re-run
         # (kept tests, no focus) the tester may legitimately leave its tests unchanged.
         produced = test_bytes is not None and (seed is None or test_bytes != seed or not focus)
@@ -489,7 +522,17 @@ class Orchestrator:
 
         test_source = test_bytes.decode("utf-8", errors="replace")
         written_in = f"{session} ({reply.usage.provider}/{reply.usage.model})"
-        self.publish_tests(ticket, test_source, written_in)
+        # Tester-owned updates to earlier tickets' acceptance files (modifications only).
+        updates: dict[str, str] = {}
+        own = self._acceptance_path(ticket)
+        for p in sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")):
+            rel = p.relative_to(repo).as_posix()
+            if rel == own or p.is_symlink():
+                continue
+            new = workspace.read_agent_file(ws, ws / "repo" / rel)
+            if new is not None and new != p.read_bytes():
+                updates[rel] = new.decode("utf-8", errors="replace")
+        self.publish_tests(ticket, test_source, written_in, updates=updates)
         note = ((" Targeted re-test requested by the human engineer." if focus else "")
                 + (f" Tester run ended early: {reply.error[:200]}." if not reply.ok else "")
                 + f" Tester turns: {reply.usage.api_calls}" + (f" (budget ~{max_turns})" if max_turns else "") + ".")
@@ -500,7 +543,8 @@ class Orchestrator:
     def _acceptance_path(self, ticket: int) -> str:
         return f"{ACCEPTANCE_DIR}test_ticket_{ticket}.py"
 
-    def publish_tests(self, ticket: int, test_source: str, written_in: str) -> str:
+    def publish_tests(self, ticket: int, test_source: str, written_in: str,
+                      updates: dict[str, str] | None = None) -> str:
         """Commit the tester's acceptance file to the ticket branch. Deterministic, no model call.
 
         Author: the tester agent (it wrote the content). Committer: the harness. Pushed with the
@@ -511,17 +555,28 @@ class Orchestrator:
         repo = workspace.harness_clone(self.team, "builder", "builder")
         workspace.checkout(repo, branch, f"origin/{branch}")
         rel = self._acceptance_path(ticket)
-        target = repo / rel
-        if target.is_file() and not target.is_symlink() and target.read_text() == test_source:
+        files = {rel: test_source, **{k: v for k, v in (updates or {}).items()
+                                      if k.startswith(ACCEPTANCE_DIR) and k.endswith(".py")}}
+        changed = []
+        for path, content in files.items():
+            target = repo / path
+            if not workspace.contained(repo, target.parent / "x"):
+                continue
+            if target.is_file() and not target.is_symlink() and target.read_text() == content:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            workspace.safe_write_bytes(target, content.encode())
+            changed.append(path)
+        if not changed:
             return workspace.git(repo, "rev-parse", "HEAD").strip()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        workspace.safe_write_bytes(target, test_source.encode())
-        workspace.git(repo, "add", "--", rel)
+        workspace.git(repo, "add", "--", *changed)
         message = (
             f"test(#{ticket}): publish tester acceptance tests\n\n"
             f"Acceptance tests written by the OpenClaw tester agent, copied verbatim into the\n"
             f"repository by the orchestrator. No model was called for this commit.\n\n"
-            f"Ticket: #{ticket}\nAgent: tester\nRuntime: OpenClaw\nWritten-in: {written_in}\n"
+            + (f"Also updates earlier acceptance tests (tester-owned): {', '.join(c for c in changed if c != rel)}\n\n"
+               if any(c != rel for c in changed) else "")
+            + f"Ticket: #{ticket}\nAgent: tester\nRuntime: OpenClaw\nWritten-in: {written_in}\n"
             f"Published-by: orchestrator harness (deterministic copy)\n"
             f"Pushed-with: builder token (tester token is read-only for contents)\n"
         )
@@ -535,7 +590,7 @@ class Orchestrator:
                 break
             time.sleep(2)
         ledger.append(Event(event="publish-tests", agent="tester", runtime="harness", ticket=ticket,
-                            outcome="committed", detail=json.dumps({"sha": sha, "path": rel, "written_in": written_in})))
+                            outcome="committed", detail=json.dumps({"sha": sha, "files": changed, "written_in": written_in})))
         return sha
 
     def verify(self, ticket: int, reply: runtimes.AgentReply | None = None, note: str = "",
@@ -644,7 +699,9 @@ def validate_review(data: dict) -> dict:
 def render_ticket(issue: dict, instructions: list[str], feedback: str, attempt: int) -> str:
     parts = [f"# Ticket #{issue['number']}: {issue['title']}", f"Attempt: {attempt}", "", issue["body"]]
     if instructions:
-        parts += ["", "## Instructions from dispatch", *[f"- {i}" for i in instructions]]
+        parts += ["", "## Instructions from dispatch",
+                  "(If an instruction conflicts with the acceptance criteria above, the acceptance criteria win.)",
+                  *[f"- {i}" for i in instructions]]
     if feedback:
         parts += ["", "## Feedback from the previous attempt (fix every point)", feedback]
     return "\n".join(parts) + "\n"

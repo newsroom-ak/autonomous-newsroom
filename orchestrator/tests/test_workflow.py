@@ -124,6 +124,7 @@ def test_assign_only_offers_tickets_whose_dependencies_are_merged(env, monkeypat
     assert orch.assign() == 1
     assert "#1 [status:todo] Schema (CANDIDATE)" in prompts[0]
     assert "#2 [status:todo] Collector (CANDIDATE)" not in prompts[0]
+    assert "table exists" in prompts[0]  # candidate's acceptance criteria are in the prompt
     assert "status:assigned" in fake.issues[1]["labels"]
 
 
@@ -533,3 +534,34 @@ def test_review_prompt_includes_committed_tests_and_results(env, monkeypatch):
         '{"verdict": "approve", "summary": "ok", "findings": []}'))
     orch.review(1)
     assert "test_acceptance_marker" in prompts[0] and "pytest exit 0" in prompts[0]
+
+
+def test_publish_includes_tester_updates_to_earlier_acceptance_files(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    orch.publish_tests(1, "def test_a():\n    assert True\n", "s")
+    # a later ticket's test step: tester relaxes an earlier ticket's file
+    orch.publish_tests(1, "def test_a():\n    assert True\n", "s2",
+                       updates={"app/tests/acceptance/test_ticket_0.py": "def test_old():\n    assert True\n",
+                                "app/newsroom/evil.py": "x = 1\n"})
+    body = subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%an|%B"], capture_output=True, text=True).stdout
+    assert body.startswith("tester (OpenClaw agent)|") and "test_ticket_0.py" in body
+    assert (clone / "app/tests/acceptance/test_ticket_0.py").exists()
+    assert not (clone / "app/newsroom/evil.py").exists()  # only acceptance files can be published
+
+
+def test_exception_allows_one_extra_scoped_attempt(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/tests/test_x.py": "ok\n", "app/newsroom/x.py": "no\n"})
+    for _ in range(TEAM.max_attempts):
+        fake.comment("builder", 1, "x", event={"event": "build"})
+    assert orch.build(1) is None and "status:needs-human" in fake.issues[1]["labels"]
+    pr = orch.build(1, exception="human ok", scope=["app/tests/test_x.py"], task="fix only test_x")
+    assert pr is not None
+    files = subprocess.run(["git", "-C", str(clone), "show", "--name-only", "--format=", "HEAD"],
+                           capture_output=True, text=True).stdout.split()
+    assert files == ["app/tests/test_x.py"]
+    msg = subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%B"], capture_output=True, text=True).stdout
+    assert "Exception: human-authorized" in msg and "Scope: app/tests/test_x.py" in msg
+    assert (config.WORK_DIR / "builder" / "TICKET.md").read_text().count("fix only test_x") == 1
+    fake.comment("builder", 1, "x", event={"event": "build"})
+    assert orch.build(1, exception="again") is None  # only one extra attempt
