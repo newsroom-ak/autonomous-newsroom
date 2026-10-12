@@ -1,0 +1,70 @@
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "file",
+        "provider": "gatewayfile",
+        "id": "value"
+      }
+    },
+    "mode": "local",
+    "bind": "loopback"
+  },
+  "secrets": {
+    "providers": {
+      "gatewayfile": {
+        "source": "file",
+        "path": "~/.openclaw-confer-newsroom/secrets/gateway-token",
+        "mode": "singleValue"
+      }
+    }
+  },
+  "tools": {
+    "elevated": {
+      "enabled": false
+    },
+    "exec": {
+      "security": "deny"
+    }
+  },
+  "browser": {
+    "enabled": false
+  },
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "all",
+        "docker": {
+          "readOnlyRoot": true,
+          "network": "none",
+          "memory": "2g",
+          "cpus": 1,
+          "pidsLimit": 128,
+          "capDrop": [
+            "ALL"
+          ],
+          "user": "1000:1000"
+        }
+      },
+      "systemAgent": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      }
+    },
+    "ownership": "explicit",
+    "entries": {}
+  },
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "api": "ollama",
+        "apiKey": "ollama-local",
+        "models": []
+      }
+    }
+  }
+}

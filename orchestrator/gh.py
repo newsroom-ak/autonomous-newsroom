@@ -1,0 +1,168 @@
+"""GitHub operations, each executed with exactly one agent's token.
+
+Tokens go to `gh` through the GH_TOKEN environment variable and to `git push` through a
+credential helper that reads an environment variable, so they never appear in argv or logs.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+
+from . import config
+
+STATUS_LABELS = (
+    "status:todo",
+    "status:assigned",
+    "status:in-review",
+    "status:in-test",
+    "status:changes-requested",
+    "status:ready-for-merge",
+    "status:needs-human",
+)
+EVENT_MARKER = re.compile(r"<!-- newsroom-event (\{.*?\}) -->")
+# Only a marker at the very end of a comment counts: the harness appends it after all
+# agent-written text, so text an agent (or anyone) writes earlier in the body cannot forge one.
+TRAILING_MARKER = re.compile(r"<!-- newsroom-event (\{[^\n]*\}) -->\s*$")
+
+
+class GitHub:
+    def __init__(self, team: config.Team):
+        self.team = team
+        self.repo = team.repo
+
+    # -- plumbing -------------------------------------------------------------------------
+    def _env(self, agent: str) -> dict[str, str]:
+        return config.github_env(config.github_token(agent, self.team))
+
+    def gh(self, agent: str, *args: str, input_text: str | None = None) -> str:
+        """Run gh with `agent`'s token. The human's own gh login is never used."""
+        proc = subprocess.run(
+            ["gh", *args], env=self._env(agent), input=input_text, capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"gh {args[0]} {args[1] if len(args) > 1 else ''} failed as {agent}: {proc.stderr.strip()}")
+        return proc.stdout
+
+    def api(self, agent: str, path: str, method: str = "GET", fields: dict | None = None) -> object:
+        args = ["api", "-X", method, path]
+        body = None
+        if fields is not None:
+            args += ["--input", "-"]
+            body = json.dumps(fields)
+        out = self.gh(agent, *args, input_text=body)
+        return json.loads(out) if out.strip() else None
+
+    # -- labels / issues ------------------------------------------------------------------
+    def ensure_labels(self, agent: str) -> None:
+        existing = {l["name"] for l in json.loads(self.gh(agent, "label", "list", "-R", self.repo, "--json", "name", "--limit", "200"))}
+        for name in ("ticket", *STATUS_LABELS):
+            if name not in existing:
+                self.gh(agent, "label", "create", name, "-R", self.repo, "--color", "5319e7" if name == "ticket" else "c5def5")
+
+    def create_issue(self, agent: str, title: str, body: str, labels: list[str]) -> int:
+        url = self.gh(agent, "issue", "create", "-R", self.repo, "--title", title, "--body-file", "-",
+                      *sum((["--label", l] for l in labels), []), input_text=body).strip()
+        return int(url.rstrip("/").rsplit("/", 1)[1])
+
+    def list_tickets(self, agent: str, state: str = "all") -> list[dict]:
+        # Only tickets dispatch created count; on a public repo anyone can open issues.
+        out = self.gh(agent, "issue", "list", "-R", self.repo, "--label", "ticket", "--state", state,
+                      "--author", self.team.bot_login, "--limit", "100", "--json", "number,title,body,state,labels")
+        tickets = json.loads(out)
+        for t in tickets:
+            t["labels"] = [l["name"] for l in t["labels"]]
+        return sorted(tickets, key=lambda t: t["number"])
+
+    def get_issue(self, agent: str, number: int) -> dict:
+        out = self.gh(agent, "issue", "view", str(number), "-R", self.repo,
+                      "--json", "number,title,body,state,labels,comments")
+        issue = json.loads(out)
+        issue["labels"] = [l["name"] for l in issue["labels"]]
+        return issue
+
+    def set_status_label(self, agent: str, number: int, status: str) -> None:
+        current = [l for l in self.get_issue(agent, number)["labels"] if l.startswith("status:")]
+        args = ["issue", "edit", str(number), "-R", self.repo, "--add-label", status]
+        for l in current:
+            if l != status:
+                args += ["--remove-label", l]
+        self.gh(agent, *args)
+
+    def comment(self, agent: str, number: int, body: str, event: dict | None = None) -> None:
+        if event is not None:
+            body += f"\n\n<!-- newsroom-event {json.dumps(event, sort_keys=True)} -->"
+        self.gh(agent, "issue", "comment", str(number), "-R", self.repo, "--body-file", "-", input_text=body)
+
+    def team_comments(self, agent: str, number: int) -> list[dict]:
+        """Comments written by the team's machine account, each with its trailing event (or None).
+
+        Comments from any other account are ignored: on a public repository anyone can comment,
+        and comment text is fed back to agents as review feedback.
+        """
+        out = []
+        for c in self.get_issue(agent, number).get("comments", []):
+            if (c.get("author") or {}).get("login") != self.team.bot_login:
+                continue
+            body = c.get("body", "")
+            m = TRAILING_MARKER.search(body)
+            event = None
+            if m:
+                try:
+                    event = json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    event = None
+            out.append({"body": body[: m.start()].rstrip() if m else body, "event": event})
+        return out
+
+    def events(self, agent: str, number: int) -> list[dict]:
+        return [c["event"] for c in self.team_comments(agent, number) if c["event"]]
+
+    # -- pull requests -----------------------------------------------------------------------
+    def find_pr(self, agent: str, branch: str, open_only: bool = False) -> dict | None:
+        """The team's PR for `branch`: same repository (no forks), opened by the machine account,
+        targeting the base branch. Anything else with a matching branch name is ignored."""
+        out = self.gh(agent, "pr", "list", "-R", self.repo, "--head", branch, "--state", "open" if open_only else "all",
+                      "--json", "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,author,url,mergedAt")
+        for pr in json.loads(out):
+            if (pr.get("headRefName") == branch and not pr.get("isCrossRepository")
+                    and (pr.get("author") or {}).get("login") == self.team.bot_login
+                    and pr.get("baseRefName") == self.team.base_branch):
+                return pr
+        return None
+
+    def create_pr(self, agent: str, branch: str, title: str, body: str) -> int:
+        url = self.gh(agent, "pr", "create", "-R", self.repo, "--base", self.team.base_branch,
+                      "--head", branch, "--title", title, "--body-file", "-", input_text=body).strip()
+        return int(url.rstrip("/").rsplit("/", 1)[1])
+
+    def pr_diff(self, agent: str, number: int) -> str:
+        return self.gh(agent, "pr", "diff", str(number), "-R", self.repo)
+
+    def pr_head(self, agent: str, number: int) -> str:
+        return json.loads(self.gh(agent, "pr", "view", str(number), "-R", self.repo, "--json", "headRefOid"))["headRefOid"]
+
+    def set_commit_status(self, agent: str, sha: str, context: str, state: str, description: str, target_url: str | None = None) -> None:
+        fields = {"state": state, "context": context, "description": description[:140]}
+        if target_url:
+            fields["target_url"] = target_url
+        self.api(agent, f"repos/{self.repo}/statuses/{sha}", method="POST", fields=fields)
+
+
+def git_as(team: config.Team, agent: str, worktree: str, *args: str) -> str:
+    """Run a networked git command (clone/fetch/push) with `agent`'s token, kept out of argv."""
+    env = config.github_env(config.github_token(agent, team))
+    helper = '!f() { echo username=x-access-token; echo "password=$NEWSROOM_PUSH_TOKEN"; }; f'
+    proc = subprocess.run(
+        ["git", "-C", worktree, "-c", "credential.helper=", "-c", f"credential.helper={helper}",
+         "-c", "core.hooksPath=/dev/null", *args],
+        env=env, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {args[0]} as {agent} failed: {proc.stderr.strip()[-500:]}")
+    return proc.stdout
+
+
+def push_branch(team: config.Team, worktree: str, branch: str, agent: str) -> None:
+    git_as(team, agent, worktree, "push", f"https://github.com/{team.repo}.git", f"HEAD:refs/heads/{branch}")
