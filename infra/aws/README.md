@@ -177,14 +177,14 @@ and delete the IAM user. An Elastic IP that is left allocated keeps billing $0.0
 
 ## Plan result (`terraform plan`, no apply)
 
-Run with the temporary `newsroom` login in `us-east-2` and a throwaway public key (the real key does not exist yet):
+First run: temporary `newsroom` login in `us-east-2` with a throwaway public key. **Re-run with the real passphrase-protected
+Ed25519 key (`~/.ssh/confer_aws_ed25519.pub`) gave the identical result.** The AWS CLI profile `newsroom` was also
+corrected to `us-east-2`. Result:
 
 - **`Plan: 9 to add, 0 to change, 0 to destroy`**, with no updates or replacements of existing resources.
 - Resources: instance (`t3.small`, Ubuntu 24.04 `...-20261004`, IMDSv2 required, no instance profile, encrypted
   20 GB gp3 root volume, standard CPU credits), Elastic IP and association, key pair, security group with SSH
   (one /32), HTTP, HTTPS and egress rules. No other services.
 - The plan reads the default VPC and one default subnet; it creates no VPC, NAT gateway, load balancer or role.
-- The provider region is `us-east-2` explicitly; the AWS CLI profile's saved default region is still `us-west-2`
-  and should be corrected before using other commands without `--region`.
 - The plan proves the configuration is accepted; it does not prove a launch will succeed (capacity, the pending
   account verification, and Free Plan limits are only tested by apply).
