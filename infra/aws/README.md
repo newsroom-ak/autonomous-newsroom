@@ -4,7 +4,7 @@ Region: **`us-east-2` (Ohio).** AWS assigned the author's Free Plan project to O
 (`us-west-2`) is unavailable without upgrading the plan, which is not being done. The first draft targeted Oregon.
 Availability in Ohio was checked offline (see "Ohio checks" below); nothing has been created.
 
-Status: **proposed, not applied.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
+Status: **proposed, validated offline only, not applied. No AWS VM exists.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
 assessment's plan B is used: an AWS Free Plan account provisioned with Terraform. The Oracle files in
 `infra/` are untouched; this is a separate root module with its own state.
 
@@ -42,32 +42,54 @@ orchestrator and all agent credentials stay on the engineer's Mac: the agent env
 lightweight public app, so nothing on the VM can reach the agents' tokens, sandboxes or GitHub permissions.
 The trade-off, described in `DELIVERY.md`, is that the agents' environment is not reproduced on the VM.
 
-## Authentication and the manual steps (done once, in the console)
+## Authentication: what was verified and what is only proposed
 
-Goal: Terraform runs with **short-lived credentials** from a **least-privilege IAM user**, with **no access
-keys**, and the account stays a Free Plan account (nothing here enables AWS Organizations).
+Goal: Terraform runs with **short-lived credentials** and **no access keys**, and the account stays a Free Plan
+account (nothing here enables AWS Organizations, IAM Identity Center or an upgrade).
+
+### Verified on the author's new AWS Free Plan account
+
+- The account exists and is on the Free Plan. Its project is restricted to `us-east-2` (Ohio).
+- An IAM user `newsroom-terraform` was created with the EC2 policy and `SignInLocalDevelopmentAccess` attached.
+  The policy attached at that time was the first, **Oregon** version; it has to be replaced by the Ohio version in
+  this directory before use. No access keys were created.
+- In AWS's new Settings > Team experience, **AWS did not offer console-password setup for that IAM user.**
+- **`aws login --region us-west-2 --profile newsroom` failed:** the browser opened by the CLI showed
+  "Something went wrong" instead of the sign-in/session picker.
+- **`aws login --remote ...` failed the same way.** Both attempts were stopped after one try each and not
+  retried.
+- **AWS CloudShell reported:** "Your account verification is in progress. This may take up to two days for new
+  accounts." Verification therefore appears to be the blocker, but that is an inference: AWS did not say it was
+  the cause of the `aws login` errors.
+- **No credentials work yet:** `terraform init`/`validate` ran offline; `terraform plan` and `apply` were never
+  run, and no AWS API call was made with this configuration.
+
+### Proposed, not verified
+
+None of the steps below has been shown to work on this account. Re-test them once account verification completes.
 
 1. **Create the policy** (IAM > Policies > Create policy > JSON): paste `iam/newsroom-terraform-ec2-policy.json`
    (EC2 actions in `us-east-2` only). Name it `NewsroomTerraformEc2UsEast2`.
-2. **Create the user** (IAM > Users > Create user): name `newsroom-terraform`; tick *Provide user access to the
-   AWS Management Console*, choose *I want to create an IAM user*, set a custom password. Attach the policies
-   `NewsroomTerraformEc2UsEast2` and the AWS-managed `SignInLocalDevelopmentAccess`. **Do not create access keys.**
-3. **Add MFA** to that user (user > Security credentials > Assign MFA device > authenticator app).
-4. **Sign in from the terminal** (the CLI is installed and a key-free profile `newsroom` exists):
-   `aws login --profile newsroom`, choose *Sign in with IAM user* in the browser (account ID or alias,
-   `newsroom-terraform`, password, MFA), and approve. The CLI refreshes the credentials for up to 12 hours.
-5. **Check the identity** without printing the account number:
+2. **An IAM user for `aws login` needs console access.** `aws login` signs in through the AWS Console, so an IAM
+   user created *without* console access (no password) **cannot** be used with it; creating such a user is not
+   sufficient. The user needs a console password, which the new Team experience did not offer, so this path
+   may be unavailable and the user may have to be created differently once the account allows it. If it
+   works: attach `NewsroomTerraformEc2UsEast2` and the AWS-managed `SignInLocalDevelopmentAccess`, add MFA, and
+   still **do not create access keys**.
+3. **Sign in from the terminal:** `aws login --region us-east-2 --profile newsroom` and, in the browser, sign in as
+   the IAM user. The CLI should then refresh temporary credentials for up to 12 hours.
+4. **Check the identity** without printing the account number:
    `aws sts get-caller-identity --profile newsroom --query Arn --output text | sed 's/[0-9]\{12\}/<account>/'`
-   should end in `user/newsroom-terraform`.
-6. **SSH key** (a passphrase is recommended): `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519`.
-7. **Then**: `cd infra/aws && terraform init && terraform plan` and review before any apply.
+5. **SSH key** (a passphrase is recommended): `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519`.
+6. **Then**: `cd infra/aws && terraform init && terraform plan` and review before any apply.
 
-Why not the alternatives: `aws login` is AWS's documented way to get temporary credentials from console sign-in
-(CLI 2.32+), works with IAM users, and needs no stored keys. **IAM Identity Center is unsuitable**: access to
-AWS accounts through its portal needs an *organization instance*, which needs AWS Organizations, and joining
-Organizations automatically upgrades a Free Plan account to the paid plan. The **root user** is not used for
-Terraform. If `aws login` does not work with Terraform in practice, AWS documents a fallback: a second profile
-with `credential_process = aws configure export-credentials --profile newsroom --format process`.
+**Alternatives and why they are not used.** IAM Identity Center is unsuitable: its portal access needs an
+*organization instance*, which needs AWS Organizations, and joining Organizations automatically upgrades a Free
+Plan account to the paid plan. The root user is not used for Terraform. If `aws login` keeps failing after
+verification, the remaining options are all unverified and need the author's decision: a second profile using
+`credential_process = aws configure export-credentials --profile newsroom --format process` (only helps once
+a login session exists), or, as a last resort, a temporary access key with the same narrow policy, which would
+be a deliberate departure from the no-access-keys goal and must be approved first.
 
 ## Secrets: nothing touches Terraform, GitHub or state
 
