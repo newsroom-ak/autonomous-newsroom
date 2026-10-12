@@ -6,7 +6,7 @@
 | **Repository** | https://github.com/newsroom-ak/autonomous-newsroom (public) |
 | **Product** | A news page on "latest AI/ML news": real Google News RSS, model-written one-line summaries and tags, SQLite, "updated X ago", refreshed on a schedule |
 | **Who wrote what** | `app/` was written by OpenClaw agents (builder and tester) through GitHub tickets and PRs. `orchestrator/`, `agents/` prompts and configuration snapshots, `scripts/`, `deploy/`, `infra/` and the docs were written by the human with Claude Code assistance (see [section 9](#9-human-involvement-and-disclosures)) |
-| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged, and the app runs publicly through a Cloudflare Quick Tunnel from the author's Mac. **Oracle Cloud provisioning failed on host capacity (confirmed).** The intended final design, agents on the Mac and the public app on an AWS `t3.small` in `us-west-2`, is **not deployed**: the AWS account's verification and sign-in are still pending (see [section 6](#6-infrastructure-and-hosting)). |
+| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged, and the app runs publicly through a Cloudflare Quick Tunnel from the author's Mac. **Oracle Cloud provisioning failed on host capacity (confirmed).** The intended final design, agents on the Mac and the public app on an AWS `t3.small`, is **not deployed** and **no AWS VM has been provisioned**. The original proposal targeted `us-west-2` (Oregon), but AWS restricted the author's Free Plan project to `us-east-2` (Ohio), so the deployment region must change to Ohio. The account's verification and sign-in are also still pending (see [section 6](#6-infrastructure-and-hosting)). |
 
 Every number below comes from `docs/evidence/ledger.jsonl` (the harness's own log), GitHub, or a command run
 for this report. Where something is an estimate or an interpretation, it says so.
@@ -265,10 +265,16 @@ re-runs; the reviewer is a weaker second gate (see improvements).
 
 The agent environment (Hermes, OpenClaw, the orchestrator and every agent credential) stays on the author's
 Mac. Only the lightweight public application (FastAPI + SQLite + Caddy) is meant to run on a cloud VM:
-**AWS EC2 `t3.small` in `us-west-2`**, provisioned with Terraform. The trade-off is that the VM does not
+**AWS EC2 `t3.small`**, provisioned with Terraform. The trade-off is that the VM does not
 reproduce the agent environment; it hosts only what the public needs, and nothing on it can reach agent tokens
 or sandboxes.
 
+- **Region: Oregon proposed, Ohio required.** The original Terraform proposal targeted `us-west-2` (Oregon). AWS
+  has since confirmed that the author's Free Plan project is assigned to `us-east-2` (Ohio), and the AWS Console
+  states that `us-west-2` is unavailable without upgrading the plan (which the author has not done and does
+  not intend to do). The deployment region must therefore change to `us-east-2`. The proposal on
+  `infra/aws-plan-b` still names Oregon (its provider region, the region-restricted IAM policy and the AMI
+  lookup) and has **not yet been updated**. **No AWS VM has been provisioned.**
 - **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB of memory; `m7i-flex.large`
   costs $0.0958/hr (about $70/month) so the $100 Free Plan credit would last about 40 days, after which the
   account closes, whereas `t3.small` lasts about 149 days. Both are Free-Plan eligible per AWS's documentation.
