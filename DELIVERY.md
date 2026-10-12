@@ -6,7 +6,7 @@
 | **Repository** | https://github.com/newsroom-ak/autonomous-newsroom (public) |
 | **Product** | A news page on "latest AI/ML news": real Google News RSS, model-written one-line summaries and tags, SQLite, "updated X ago", refreshed on a schedule |
 | **Who wrote what** | `app/` was written by OpenClaw agents (builder and tester) through GitHub tickets and PRs. `orchestrator/`, `agents/` prompts and configuration snapshots, `scripts/`, `deploy/`, `infra/` and the docs were written by the human with Claude Code assistance (see [section 9](#9-human-involvement-and-disclosures)) |
-| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged, and the app runs publicly through a Cloudflare Quick Tunnel from the author's Mac. **Oracle Cloud provisioning failed on host capacity (confirmed).** The intended final design, agents on the Mac and the public app on an AWS `t3.small`, is **not deployed** and **no AWS VM has been provisioned**. The original proposal targeted `us-west-2` (Oregon), but AWS restricted the author's Free Plan project to `us-east-2` (Ohio), so the deployment region must change to Ohio. The account's verification and sign-in are also still pending (see [section 6](#6-infrastructure-and-hosting)). |
+| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged. The app runs publicly in two places: on an **AWS EC2 `t3.small` in `us-east-2` (Ohio), provisioned with Terraform** (https://3-13-197-253.sslip.io, verified 2026-10-12), and through the Cloudflare Quick Tunnel from the author's Mac (kept as the fallback). Oracle provisioning failed on confirmed host capacity. The agents (Hermes, OpenClaw, orchestrator) stay on the Mac by design (see [section 6](#6-infrastructure-and-hosting)). |
 
 Every number below comes from `docs/evidence/ledger.jsonl` (the harness's own log), GitHub, or a command run
 for this report. Where something is an estimate or an interpretation, it says so.
@@ -20,7 +20,7 @@ for this report. Where something is an estimate or an interpretation, it says so
 | OpenClaw **and** Hermes, both used, with orchestrator, builder, reviewer, tester | ✅ | [Roster](#2-agent-roster) |
 | Tickets flow through something inspectable; review and test can send work back | ✅ | GitHub issues #4–#8, #16; PRs #9, #11, #13, #14, #15, #17; [rejections](#5-what-broke-and-how-it-was-handled) |
 | Agents write the code; git history shows agent-authored commits | ✅ for `app/` | 30 agent commits on `main` (17 builder, 13 tester); [section 3](#3-what-each-agent-actually-did) |
-| Free stack: free VM provisioned with Terraform, free models | ⚠️ partial | Oracle Terraform exists (`infra/`) but **no VM was ever created** (confirmed host-capacity failure, [section 6](#6-infrastructure-and-hosting)). AWS plan B is drafted but **not deployed** (account verification pending). Models: Ollama Cloud free plan only. |
+| Free stack: free VM provisioned with Terraform, free models | ✅ AWS / ❌ Oracle | A Terraform-provisioned VM exists on **AWS** (Free Plan, `t3.small`, Ohio; [section 6](#6-infrastructure-and-hosting)). Oracle Always Free **never created a VM** (confirmed host-capacity failure). The brief's `m7i-flex.large` was replaced by `t3.small` to stretch credit. Models: Ollama Cloud free plan only. |
 | Public URL that loads and does the core thing | ✅ with limits | Quick Tunnel; URL changes if the tunnel restarts; the Mac must stay on |
 | Page: ~10 articles, one-line summary, topic tag, source link, "updated X ago" | ✅ | Verified live: 10 articles, none empty, model-written summaries |
 | Scheduled refresh, stored in a database | ✅ | In-app scheduler (startup + every 180 min), SQLite. **Verified live:** the second refresh fired on its own exactly 180 minutes after the first ([section 8](#8-quality-gates-in-practice)) |
@@ -28,7 +28,7 @@ for this report. Where something is an estimate or an interpretation, it says so
 | `agents/` with each agent's config, prompts and skills (secrets removed) | ✅ | Prompts, `agents/team.json`, and sanitized Hermes/OpenClaw snapshots with provenance in `agents/SNAPSHOT.md` |
 | Token and model report | ✅ | [Section 4](#4-token-and-model-report), including a cross-check against Hermes's own usage records |
 | Trace excerpts, reproduce instructions | ✅ | [Section 7](#7-trace-excerpts), [section 10](#10-reproduce) |
-| Reproduce with `terraform apply` + one install script | ❌ | No VM was created, so nothing was reproduced from a `terraform apply`. The Mac-based procedure is in [section 10](#10-reproduce); an AWS Terraform proposal exists but is unapplied. |
+| Reproduce with `terraform apply` + one install script | ✅ app / ⚠️ agents | `infra/aws/` (`terraform apply` + cloud-init) reproduced the public app on a fresh VM; a fresh plan afterwards showed no changes. The model key is installed over SSH afterwards (a manual step by design). The agent environment is **not** reproduced on the VM; it is a Mac-based procedure ([section 10](#10-reproduce)).
 
 ---
 
@@ -261,41 +261,61 @@ re-runs; the reviewer is a weaker second gate (see improvements).
   passed when plan B was chosen, so the brief's "still blocked after a day" condition was **not** strictly
   met; this was a deliberate decision, not a finding that Oracle stays full).
 
-### Architecture decision and AWS (plan B): pending, not deployed
+### AWS (plan B): deployed with Terraform
 
-The agent environment (Hermes, OpenClaw, the orchestrator and every agent credential) stays on the author's
-Mac. Only the lightweight public application (FastAPI + SQLite + Caddy) is meant to run on a cloud VM:
-**AWS EC2 `t3.small`**, provisioned with Terraform. The trade-off is that the VM does not
-reproduce the agent environment; it hosts only what the public needs, and nothing on it can reach agent tokens
-or sandboxes.
+**Why the agents stay on the Mac.** Hermes, OpenClaw, the orchestrator and every agent credential run on the
+author's Mac. Only the lightweight public app (FastAPI + SQLite, behind Caddy) runs on the cloud VM. This keeps
+the four GitHub tokens, the model key and the OpenClaw sandbox off an internet-facing machine, and the agents'
+Docker sandbox and local gateway are designed for a workstation. The trade-off: the VM does not reproduce the
+agent environment, and the brief's wish for the whole team on the VM is not met.
 
-- **Region: Oregon proposed, Ohio required.** The original Terraform proposal targeted `us-west-2` (Oregon). AWS
-  has since confirmed that the author's Free Plan project is assigned to `us-east-2` (Ohio), and the AWS Console
-  states that `us-west-2` is unavailable without upgrading the plan (which the author has not done and does
-  not intend to do). The deployment region therefore changed to `us-east-2`. The Terraform on the
-  infrastructure branch (`infra/aws/`) was updated accordingly (provider region, region-restricted IAM policy,
-  README); the Ubuntu AMI lookup is by name and resolves in any region. Ohio availability was checked offline
-  only: the `t3.small` price in Ohio ($0.0208/hr) and a Canonical Ubuntu 24.04 `hvm`/`ssd-gp3` AMI listing for
-  `us-east-2`. `aws login --region us-east-2` later **succeeded** (the Oregon attempts had failed), a read-only check found
-  `t3.small` and the Ubuntu AMI in Ohio, and `terraform plan` showed 9 to add, 0 to change, 0 to destroy. The
-  CloudShell "account verification in progress" restriction is **unresolved**, so whether a launch will succeed is
-  untested. **No AWS VM has been provisioned; `terraform apply` has not been run.**
-- **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB of memory; `m7i-flex.large`
-  costs $0.0958/hr (about $70/month) so the $100 Free Plan credit would last about 40 days, after which the
-  account closes, whereas `t3.small` lasts about 149 days. Both are Free-Plan eligible per AWS's documentation.
-- **What exists:** a Terraform proposal (one instance in the default VPC, one security group, one key pair, one
-  Elastic IP, Caddy for HTTPS, systemd units, no IAM role, no secrets in Terraform) drafted and validated
-  offline, with its bootstrap rehearsed in a clean Ubuntu 24.04 container. It lives in `infra/aws/`
-  on a separate infrastructure branch (`infra/aws-plan-b`), not in the documentation PRs #19/#20. Nothing was applied.
-- **Where it stands:** the AWS Free Plan account is created and active, and **no AWS resource and no access key
-  exists.** `aws login` and `aws login --remote` first failed ("Something went wrong") because they targeted
-  Oregon, which AWS blocks for this project; `aws login --region us-east-2` then succeeded and issued temporary
-  credentials for a full-access role (not the planned least-privilege user). AWS CloudShell still reported
-  "Your account verification is in progress. This may take up to two days for new accounts"; that restriction
-  is unresolved and was not re-tested. `terraform apply` awaits the author's approval.
-- **Do not read the AWS work as a deployment.** The only public deployment is the Quick Tunnel below.
+**What was deployed (verified 2026-10-12).**
+- `infra/aws/` provisioned 9 Terraform resources in **`us-east-2` (Ohio)**: one `t3.small` (Ubuntu 24.04, IMDSv2
+  only, no instance profile, 20 GB encrypted gp3), an Elastic IP and association, a key pair, and a security group
+  with SSH from one /32, HTTP, HTTPS and egress. No NAT gateway, load balancer, database or IAM role. A fresh
+  `terraform plan` after the final apply showed no changes.
+- **Public URL:** https://3-13-197-253.sslip.io (Caddy with an automatically issued certificate, `sslip.io` hostname). `/`, `/api/articles`
+  return 200; `/docs`, `/redoc` return 404; writes return 405. The code is the pinned commit
+  `f3349a039d7a1046ec5505286be7ad906158ab71` (identical to the Cloudflare deployment).
+- **Region:** the first proposal targeted `us-west-2` (Oregon). AWS restricted the author's Free Plan project to
+  `us-east-2` and states Oregon is unavailable without upgrading, so the plan moved to Ohio. The earlier `aws login`
+  failures had used Oregon; `aws login --region us-east-2` succeeded on the first try. Terraform ran with that
+  session's temporary credentials (a full-access role, not the planned least-privilege user); no access key was
+  created, the plan was not upgraded and Organizations was not enabled. The CloudShell message about account
+  verification was never needed for the deployment and was not re-tested.
+- **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB; `m7i-flex.large` ($0.0958/hr)
+  would exhaust the $100 credit in about 40 days, `t3.small` ($0.0208/hr) in about 149 days. Ongoing cost is about
+  $0.67/day (instance, public IPv4, 20 GB gp3). Terraform does not compute credit use; these are estimates from AWS's
+  published prices.
+- **Model key:** installed over SSH from the author's local env file (stdin, not an argument) into `/etc/newsroom/env`
+  (`root:newsroom`, mode 0640, in a 0750 directory) and read by systemd's `EnvironmentFile=`. It is not in Terraform,
+  state, GitHub or `user_data`. Exact-match checks found it in no public response, no journal, no `systemctl show`
+  output and not in the unit file; the unprivileged login user cannot read the file.
+- **Verified on the VM:** service and Caddy enabled and active, 0 restarts, restart policy `always`; a manual
+  `systemctl restart` brought the service back and its startup refresh ran (run 2: 100 fetched, 0 new). Memory 441 MB
+  of 1.9 GB used, disk 13%. After the key was installed the database held 12 model summaries (11 `gpt-oss:20b`, 1
+  `nemotron-3-nano:30b`), 12 title fallbacks left over from the first, key-less refresh, and 76 articles not yet
+  summarised (the app summarises a limited batch per refresh).
+- **Not yet verified on AWS:** the **180-minute scheduled refresh** (the first fire is due about 10:28 UTC on
+  2026-10-12; the same code was verified firing on its own on the Mac deployment, section 8); behaviour across a
+  **reboot** (no reboot was performed); capacity/uptime beyond the first hours.
+- **Exposure:** within minutes of going live an outside scanner requested `/.env`, `/config.json`, `/api/config`
+  and similar paths; all returned 404.
 
-### Current public deployment: Cloudflare Quick Tunnel from the author's Mac
+**Two real Terraform incidents.**
+1. **Invalid security-group description.** The first `terraform apply` created 8 of 9 resources and failed on the
+   SSH ingress rule: AWS rejected the description `SSH from the engineer's IP only` (`InvalidParameterValue`: the
+   apostrophe is not an allowed character). Not a verification, quota or permission error. Nothing was retried or
+   destroyed; the description was corrected and all five descriptions were checked against AWS's allowed set.
+2. **Public-IP drift forcing replacement.** The corrected plan wanted to **replace the instance** (3 to add, 2 to
+   destroy) and was **not applied**. The config said `associate_public_ip_address = false`, but the AWS provider
+   reads `true` whenever the network interface has any public IP, and the Elastic IP counts. Setting the attribute
+   to `true` (with a comment) described the real instance without `ignore_changes`; the plan then showed exactly
+   1 to add, 0 to change, 0 to destroy, and the one apply that followed added only the SSH rule. The instance and
+   Elastic IP association kept their IDs.
+Both were bugs in the Terraform written for this project, found only by planning and applying against a real account.
+
+### Fallback deployment: Cloudflare Quick Tunnel from the author's Mac
 
 - `deploy/run-newsroom.sh` serves the merged app from an immutable `git archive` in a hardened container bound
   to `127.0.0.1:8000` and points `cloudflared` at that single port (the brief's documented emergency fallback).
@@ -418,7 +438,7 @@ convention, not enforced by GitHub.
 
 ## 10. Reproduce
 
-This is a Mac-based procedure; there is no one-command Linux install because no VM was created (Oracle: no capacity; AWS: pending verification).
+The agents are a Mac-based procedure. The public app on a VM is reproducible with `infra/aws/` (step 9); Oracle never created a VM (no capacity).
 
 1. **Prerequisites:** Docker Desktop, Node 24.16+ or 26, `uv`, `gh`, Python 3.13+, `terraform` (for `infra/`
    only), `brew install cloudflared`, a free Ollama Cloud API key, and four fine-grained GitHub tokens on a
@@ -439,8 +459,10 @@ This is a Mac-based procedure; there is no one-command Linux install because no 
    **Agent configuration snapshots:** `python3 scripts/snapshot_agent_configs.py` regenerates them (sanitized).
 8. **Oracle (not completed):** `infra/` with `terraform.tfvars` from the example; expect the capacity error
    until Oracle has capacity in `us-sanjose-1` (check first with Oracle's compute capacity-report API).
-9. **AWS (proposed, not applied):** see `infra/aws/` (Ohio, `us-east-2`; separate infrastructure PR); it needs an
-   AWS CLI session with EC2 rights, which was not available at hand-over.
+9. **AWS (deployed, public app only):** `infra/aws/README.md` has the steps. Put your public IP in
+   `terraform.tfvars` (`ssh_allowed_cidr`), create the key with `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519`,
+   run `terraform init`, `terraform plan` (expect 9 to add), then `terraform apply`, and install the model key over
+   SSH as the README shows. It needs an AWS CLI session with EC2 rights in `us-east-2`.
 
 ---
 
@@ -453,8 +475,9 @@ This is a Mac-based procedure; there is no one-command Linux install because no 
 - **Topic tags are weak:** the first word of the summary, as the ticket specified ("find", "one", "ai").
 - **800 completion tokens is marginal for reasoning models**; some articles fall back to the marked title.
 - **Hosting:** the URL changes if the tunnel restarts; the Mac must stay awake; no uptime guarantee.
-- **No Terraform-created VM exists** (Oracle: no capacity; AWS: verification pending), the weakest part of the
-  infrastructure-as-code criterion.
+- **The VM hosts only the public app.** The agent environment is not reproduced on it, and Terraform ran with a
+  full-access AWS role from a temporary login, not the least-privilege user in the plan. The scheduled refresh and a
+  reboot are not yet verified on AWS.
 - **Token ledger gaps:** one OpenClaw run has no usage record, five Hermes verification sessions (19,007 tokens)
   are not in the ledger, and OpenClaw totals have no independent source (section 4).
 - **Builder's own `test_scheduler.py`** starts and stops the scheduler in separate event loops, so it checks less
@@ -476,8 +499,8 @@ This is a Mac-based procedure; there is no one-command Linux install because no 
 4. **Run a live smoke test as part of the workflow** (real feed, one real model call) so defects like the Google
    News redirect are caught before merge.
 5. **Move the first refresh into a background task** so the server answers immediately, and disable `/docs`.
-6. **A real VM:** keep retrying Oracle, or use the brief's AWS plan B, with a named Cloudflare tunnel or Caddy
-   instead of a Quick Tunnel.
+6. **Hosting:** the AWS VM exists; I would add a least-privilege IAM role for Terraform, a real domain name, and
+   retire the Quick Tunnel once the AWS scheduler has been seen firing.
 7. **Per-agent identities** (one OpenRouter key per agent, Langfuse for traces) to get independent usage numbers
    and GitHub-enforced separation.
 8. **Smaller tickets** and a rule that a builder may not claim an edit it did not make (the tool-failure

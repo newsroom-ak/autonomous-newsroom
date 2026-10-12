@@ -48,7 +48,7 @@ resource "aws_security_group" "newsroom" {
 
 resource "aws_vpc_security_group_ingress_rule" "ssh" {
   security_group_id = aws_security_group.newsroom.id
-  description       = "SSH from the engineer's IP only"
+  description       = "SSH from engineer IP only"
   cidr_ipv4         = var.ssh_allowed_cidr
   ip_protocol       = "tcp"
   from_port         = 22
@@ -87,12 +87,16 @@ resource "aws_eip" "newsroom" {
 }
 
 resource "aws_instance" "newsroom" {
-  ami                         = data.aws_ami.ubuntu_2404.id
-  instance_type               = var.instance_type
-  subnet_id                   = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids      = [aws_security_group.newsroom.id]
-  key_name                    = aws_key_pair.newsroom.key_name
-  associate_public_ip_address = false # the Elastic IP is the only public IPv4 (one IPv4 charge, not two)
+  ami                    = data.aws_ami.ubuntu_2404.id
+  instance_type          = var.instance_type
+  subnet_id              = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids = [aws_security_group.newsroom.id]
+  key_name               = aws_key_pair.newsroom.key_name
+  # The provider reports this as true whenever the network interface has any public IP, including an Elastic IP.
+  # `false` therefore showed permanent drift (and forced replacement) once the EIP was associated. `true` states
+  # the observed reality; the subnet's auto-assigned address is replaced by the Elastic IP at association, so
+  # the Elastic IP remains the only public IPv4 that is billed over time.
+  associate_public_ip_address = true
   monitoring                  = false # detailed monitoring is a paid add-on
 
   # IMDSv2 only; no instance profile, so the VM has no AWS permissions at all.
