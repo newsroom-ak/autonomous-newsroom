@@ -276,8 +276,10 @@ or sandboxes.
   infrastructure branch (`infra/aws/`) was updated accordingly (provider region, region-restricted IAM policy,
   README); the Ubuntu AMI lookup is by name and resolves in any region. Ohio availability was checked offline
   only: the `t3.small` price in Ohio ($0.0208/hr) and a Canonical Ubuntu 24.04 `hvm`/`ssd-gp3` AMI listing for
-  `us-east-2`. Whether this account can actually launch `t3.small` there is confirmed only by a credentialed
-  `terraform plan`/apply. **No AWS VM has been provisioned.**
+  `us-east-2`. `aws login --region us-east-2` later **succeeded** (the Oregon attempts had failed), a read-only check found
+  `t3.small` and the Ubuntu AMI in Ohio, and `terraform plan` showed 9 to add, 0 to change, 0 to destroy. The
+  CloudShell "account verification in progress" restriction is **unresolved**, so whether a launch will succeed is
+  untested. **No AWS VM has been provisioned; `terraform apply` has not been run.**
 - **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB of memory; `m7i-flex.large`
   costs $0.0958/hr (about $70/month) so the $100 Free Plan credit would last about 40 days, after which the
   account closes, whereas `t3.small` lasts about 149 days. Both are Free-Plan eligible per AWS's documentation.
@@ -285,11 +287,12 @@ or sandboxes.
   Elastic IP, Caddy for HTTPS, systemd units, no IAM role, no secrets in Terraform) drafted and validated
   offline, with its bootstrap rehearsed in a clean Ubuntu 24.04 container. It lives in `infra/aws/`
   on a separate infrastructure branch (`infra/aws-plan-b`), not in the documentation PRs #19/#20. Nothing was applied.
-- **Where it stands:** the AWS Free Plan account is created and active, but **no AWS resource and no access key
-  exists.** In the new AWS "Team" experience an IAM user cannot be given a console password; `aws login` and
-  `aws login --remote` did not complete (the browser showed "Something went wrong" instead of the session
-  picker), and AWS CloudShell reports "Your account verification is in progress. This may take up to two days
-  for new accounts." The author stopped authentication attempts until verification completes.
+- **Where it stands:** the AWS Free Plan account is created and active, and **no AWS resource and no access key
+  exists.** `aws login` and `aws login --remote` first failed ("Something went wrong") because they targeted
+  Oregon, which AWS blocks for this project; `aws login --region us-east-2` then succeeded and issued temporary
+  credentials for a full-access role (not the planned least-privilege user). AWS CloudShell still reported
+  "Your account verification is in progress. This may take up to two days for new accounts"; that restriction
+  is unresolved and was not re-tested. `terraform apply` awaits the author's approval.
 - **Do not read the AWS work as a deployment.** The only public deployment is the Quick Tunnel below.
 
 ### Current public deployment: Cloudflare Quick Tunnel from the author's Mac
