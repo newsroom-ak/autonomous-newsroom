@@ -72,7 +72,38 @@ def fetch_articles(topic: str | None = None) -> List[Dict[str, Any]]:
         topic = os.getenv(TOPIC_ENV, DEFAULT_TOPIC)
     url = _build_url(topic)
     # ``httpx`` is used for its simple API and built‑in timeout handling.
-    resp = httpx.get(url, timeout=10.0)
+    # The feed fetcher must follow redirects safely (max 5, HTTPS only) and
+    # send a descriptive User-Agent header. ``httpx`` follows redirects by
+    # default, but we enforce the limit and protocol constraints manually to
+    # satisfy the ticket criteria while staying compatible with the test suite
+    # where ``httpx.get`` may be mocked with a lightweight stub lacking extra
+    # attributes.
+    headers = {"User-Agent": "newsroom-bot/1.0"}
+    resp = httpx.get(url, timeout=10.0, headers=headers, follow_redirects=False)
+
+    # Manual redirect handling – up to five hops and HTTPS only.
+    redirect_count = 0
+    while getattr(resp, "is_redirect", False):
+        redirect_count += 1
+        if redirect_count > 5:
+            raise httpx.HTTPError("Too many redirects (limit 5)")
+        location = resp.headers.get("Location")
+        if not location:
+            raise httpx.HTTPError("Redirect response missing Location header")
+        # Resolve relative redirects.
+        # Resolve the Location header against the current URL. ``httpx.URL``
+        # does not accept a ``base`` argument, so we use the ``join`` method to
+        # correctly handle relative redirects.
+        from httpx import URL
+        # ``resp.url`` is a ``httpx.URL``; ``join`` resolves ``location``
+        # relative to it, producing a new ``URL`` instance.
+        next_url = resp.url.join(location)
+        if next_url.scheme != "https":
+            raise httpx.HTTPError("Redirect target is not HTTPS")
+        # Follow the next hop with the same headers.
+        resp = httpx.get(str(next_url), timeout=10.0, headers=headers, follow_redirects=False)
+
+    # At this point we have a non‑redirect response.
     resp.raise_for_status()
     parsed = feedparser.parse(resp.text)
     articles: List[Dict[str, Any]] = []
