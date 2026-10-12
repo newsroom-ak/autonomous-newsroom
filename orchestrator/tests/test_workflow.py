@@ -534,3 +534,17 @@ def test_review_prompt_includes_committed_tests_and_results(env, monkeypatch):
         '{"verdict": "approve", "summary": "ok", "findings": []}'))
     orch.review(1)
     assert "test_acceptance_marker" in prompts[0] and "pytest exit 0" in prompts[0]
+
+
+def test_publish_includes_tester_updates_to_earlier_acceptance_files(env, monkeypatch):
+    orch, fake, clone, pushed = _setup_build(env, monkeypatch, {"app/a.py": "a = 1\n"})
+    orch.build(1)
+    orch.publish_tests(1, "def test_a():\n    assert True\n", "s")
+    # a later ticket's test step: tester relaxes an earlier ticket's file
+    orch.publish_tests(1, "def test_a():\n    assert True\n", "s2",
+                       updates={"app/tests/acceptance/test_ticket_0.py": "def test_old():\n    assert True\n",
+                                "app/newsroom/evil.py": "x = 1\n"})
+    body = subprocess.run(["git", "-C", str(clone), "log", "-1", "--format=%an|%B"], capture_output=True, text=True).stdout
+    assert body.startswith("tester (OpenClaw agent)|") and "test_ticket_0.py" in body
+    assert (clone / "app/tests/acceptance/test_ticket_0.py").exists()
+    assert not (clone / "app/newsroom/evil.py").exists()  # only acceptance files can be published

@@ -25,7 +25,7 @@ MAX_DIFF_CHARS = 60_000
 MAX_FEEDBACK_CHARS = 16_000
 # OpenClaw has no per-run turn limit, so a turn budget is enforced approximately: the agent is
 # told its budget and the run gets a wall-clock deadline of SECONDS_PER_TURN per budgeted turn.
-SECONDS_PER_TURN = 10
+SECONDS_PER_TURN = 6
 # Tester-written acceptance tests are committed here, one file per ticket. The builder may not
 # change or delete them (enforced when importing the builder's files).
 ACCEPTANCE_DIR = "app/tests/acceptance/"
@@ -102,6 +102,10 @@ with your summary.
 TEST_MESSAGE = """\
 New handoff from reviewer: pull request #{pr} for ticket #{ticket} passed review.
 Read TICKET.md, read the implementation under repo/app/, and write acceptance/test_acceptance.py.
+Earlier tickets' acceptance tests are in repo/app/tests/acceptance/. If one of them fails only because
+this ticket legitimately extends behaviour (for example, it adds database columns), you may minimally
+update that file in place so it still checks its own ticket's acceptance criteria. Never weaken a real
+requirement, and list any such change in your reply.
 """
 
 
@@ -496,7 +500,17 @@ class Orchestrator:
 
         test_source = test_bytes.decode("utf-8", errors="replace")
         written_in = f"{session} ({reply.usage.provider}/{reply.usage.model})"
-        self.publish_tests(ticket, test_source, written_in)
+        # Tester-owned updates to earlier tickets' acceptance files (modifications only).
+        updates: dict[str, str] = {}
+        own = self._acceptance_path(ticket)
+        for p in sorted((repo / ACCEPTANCE_DIR).glob("test_ticket_*.py")):
+            rel = p.relative_to(repo).as_posix()
+            if rel == own or p.is_symlink():
+                continue
+            new = workspace.read_agent_file(ws, ws / "repo" / rel)
+            if new is not None and new != p.read_bytes():
+                updates[rel] = new.decode("utf-8", errors="replace")
+        self.publish_tests(ticket, test_source, written_in, updates=updates)
         note = ((" Targeted re-test requested by the human engineer." if focus else "")
                 + (f" Tester run ended early: {reply.error[:200]}." if not reply.ok else "")
                 + f" Tester turns: {reply.usage.api_calls}" + (f" (budget ~{max_turns})" if max_turns else "") + ".")
@@ -507,7 +521,8 @@ class Orchestrator:
     def _acceptance_path(self, ticket: int) -> str:
         return f"{ACCEPTANCE_DIR}test_ticket_{ticket}.py"
 
-    def publish_tests(self, ticket: int, test_source: str, written_in: str) -> str:
+    def publish_tests(self, ticket: int, test_source: str, written_in: str,
+                      updates: dict[str, str] | None = None) -> str:
         """Commit the tester's acceptance file to the ticket branch. Deterministic, no model call.
 
         Author: the tester agent (it wrote the content). Committer: the harness. Pushed with the
@@ -518,17 +533,28 @@ class Orchestrator:
         repo = workspace.harness_clone(self.team, "builder", "builder")
         workspace.checkout(repo, branch, f"origin/{branch}")
         rel = self._acceptance_path(ticket)
-        target = repo / rel
-        if target.is_file() and not target.is_symlink() and target.read_text() == test_source:
+        files = {rel: test_source, **{k: v for k, v in (updates or {}).items()
+                                      if k.startswith(ACCEPTANCE_DIR) and k.endswith(".py")}}
+        changed = []
+        for path, content in files.items():
+            target = repo / path
+            if not workspace.contained(repo, target.parent / "x"):
+                continue
+            if target.is_file() and not target.is_symlink() and target.read_text() == content:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            workspace.safe_write_bytes(target, content.encode())
+            changed.append(path)
+        if not changed:
             return workspace.git(repo, "rev-parse", "HEAD").strip()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        workspace.safe_write_bytes(target, test_source.encode())
-        workspace.git(repo, "add", "--", rel)
+        workspace.git(repo, "add", "--", *changed)
         message = (
             f"test(#{ticket}): publish tester acceptance tests\n\n"
             f"Acceptance tests written by the OpenClaw tester agent, copied verbatim into the\n"
             f"repository by the orchestrator. No model was called for this commit.\n\n"
-            f"Ticket: #{ticket}\nAgent: tester\nRuntime: OpenClaw\nWritten-in: {written_in}\n"
+            + (f"Also updates earlier acceptance tests (tester-owned): {', '.join(c for c in changed if c != rel)}\n\n"
+               if any(c != rel for c in changed) else "")
+            + f"Ticket: #{ticket}\nAgent: tester\nRuntime: OpenClaw\nWritten-in: {written_in}\n"
             f"Published-by: orchestrator harness (deterministic copy)\n"
             f"Pushed-with: builder token (tester token is read-only for contents)\n"
         )
@@ -542,7 +568,7 @@ class Orchestrator:
                 break
             time.sleep(2)
         ledger.append(Event(event="publish-tests", agent="tester", runtime="harness", ticket=ticket,
-                            outcome="committed", detail=json.dumps({"sha": sha, "path": rel, "written_in": written_in})))
+                            outcome="committed", detail=json.dumps({"sha": sha, "files": changed, "written_in": written_in})))
         return sha
 
     def verify(self, ticket: int, reply: runtimes.AgentReply | None = None, note: str = "",
