@@ -65,7 +65,7 @@ account (nothing here enables AWS Organizations, IAM Identity Center or an upgra
 - **Read-only checks in Ohio passed:** caller identity, no existing instances, Elastic IPs or key pairs, a default
   VPC with subnets in `us-east-2a`/`b`/`c`, `t3.small` offered in all three, and Canonical's Ubuntu 24.04 AMI
   (`...-20261004`) visible.
-- **`terraform plan` succeeded** (see "Plan result" below). `apply` has **not** been run and no VM exists.
+- **`terraform plan` succeeded** (see "Plan result" below), and the `apply` that followed **created the VM**: the first apply made 8 of 9 resources and failed on one rule, and a second apply from a reviewed plan added it (see "Apply result and verification" and "Terraform incidents" below). The instance is running and serves the public app.
 
 ### Proposed, not verified
 
