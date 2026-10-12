@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import hashlib
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +54,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             published_at TEXT,
             fetched_at TEXT NOT NULL,
             summary TEXT,
-            topic_tag TEXT
+            topic_tag TEXT,
+            summary_source TEXT,
+            summary_model TEXT,
+            content_hash TEXT
         )
         """
     )
@@ -100,40 +104,129 @@ def upsert_article(
     fetched_at: Optional[str] = None,
     summary: Optional[str] = None,
     topic_tag: Optional[str] = None,
+    summary_source: Optional[str] = None,
+    summary_model: Optional[str] = None,
+    content_hash: Optional[str] = None,
 ) -> Tuple[int, bool]:
-    """Insert a new article or ignore if it already exists.
+    """Insert a new article or update an existing one when its title changes.
 
-    Returns a tuple ``(article_id, is_new)`` where ``is_new`` indicates whether
-    the row was created. ``article_id`` is the primary key of the existing or
-    newly inserted row.
+    Returns ``(article_id, is_new)`` where ``is_new`` is ``True`` when the row was
+    freshly inserted **or** when the existing row's ``content_hash`` differed (meaning
+    the title changed). In the latter case the summary‑related fields are cleared
+    so that the summarisation step can re‑run.
     """
     fetched_at = fetched_at or datetime.utcnow().isoformat()
+    # Use a deterministic hash of the title as the content hash if not supplied.
+    if content_hash is None:
+        content_hash = hashlib.sha256(title.encode()).hexdigest()
+
     with get_connection() as conn:
         cur = conn.cursor()
-        # Try to insert; ``IGNORE`` respects the UNIQUE constraint.
+        # Attempt insert – respects UNIQUE constraint on source_url.
         cur.execute(
             """
             INSERT OR IGNORE INTO articles (
-                source_url, title, published_at, fetched_at, summary, topic_tag
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                source_url, title, published_at, fetched_at, summary, topic_tag,
+                summary_source, summary_model, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (source_url, title, published_at, fetched_at, summary, topic_tag),
+            (
+                source_url,
+                title,
+                published_at,
+                fetched_at,
+                summary,
+                topic_tag,
+                summary_source,
+                summary_model,
+                content_hash,
+            ),
         )
-        # ``lastrowid`` is non‑zero only when a row was inserted.
         if cur.lastrowid:
+            # Fresh insert.
             article_id = cur.lastrowid
             is_new = True
         else:
-            # Retrieve the existing id.
+            # Row exists – check if the title (content_hash) changed.
             cur.execute(
-                "SELECT id FROM articles WHERE source_url = ?",
+                "SELECT id, content_hash FROM articles WHERE source_url = ?",
                 (source_url,),
             )
             row = cur.fetchone()
             article_id = row[0] if row else -1
-            is_new = False
+            existing_hash = row[1] if row else None
+            if existing_hash != content_hash:
+                # Update title and content_hash, and clear summary related fields.
+                cur.execute(
+                    """
+                    UPDATE articles SET
+                        title = ?,
+                        published_at = ?,
+                        fetched_at = ?,
+                        summary = NULL,
+                        topic_tag = NULL,
+                        summary_source = NULL,
+                        summary_model = NULL,
+                        content_hash = ?
+                    WHERE source_url = ?
+                    """,
+                    (title, published_at, fetched_at, content_hash, source_url),
+                )
+                is_new = True
+            else:
+                is_new = False
         conn.commit()
         return article_id, is_new
+
+
+def get_unsummarized(limit: int) -> list[tuple[int, str, str]]:
+    """Return up to *limit* articles missing a summary.
+
+    The result is ordered by ``fetched_at`` descending (newest first) to satisfy the
+    free‑tier limit rule.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, source_url, title FROM articles
+            WHERE summary IS NULL
+            ORDER BY fetched_at DESC
+            LIMIT ?
+            """,
+            (limit, ),
+        )
+        return list(cur.fetchall())
+
+
+def update_summary(
+    *,
+    article_id: int,
+    summary: str,
+    topic_tag: str,
+    summary_source: str,
+    summary_model: str | None = None,
+) -> None:
+    """Persist a summary and its metadata for *article_id*.
+
+    ``summary_source`` should be either ``"model"`` or ``"fallback"``.
+    ``summary_model`` is the name of the model that generated the summary, or ``None``
+    for the fallback path.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE articles SET
+                summary = ?,
+                topic_tag = ?,
+                summary_source = ?,
+                summary_model = ?
+            WHERE id = ?
+            """,
+            (summary, topic_tag, summary_source, summary_model, article_id),
+        )
+        conn.commit()
 
 
 def insert_refresh_run(
