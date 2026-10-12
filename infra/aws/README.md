@@ -31,20 +31,39 @@ dependencies in a venv, and starts two systemd services:
 The site is dark for about 70 seconds after every (re)start while the app's first refresh runs (a known
 limitation); Caddy answers 502 during that time.
 
-## Prerequisites that need your approval (none exist yet)
+## Architecture decision
 
-1. **AWS CLI >= 2.32** on your Mac (`brew install awscli`).
-2. **A least-privilege IAM user, created in the console, with a password and MFA and no access keys.**
-   Attach the AWS-managed policies `AmazonEC2FullAccess` and `SignInLocalDevelopmentAccess`.
-   Do **not** use the root user for Terraform, and do **not** create root or IAM access keys.
-3. **Sign in with `aws login --profile newsroom`** as that user. This issues short-lived credentials refreshed
-   by the CLI (up to 12 hours); nothing long-lived is stored. Do **not** use IAM Identity Center: it requires
-   AWS Organizations, and joining Organizations **automatically upgrades a Free Plan account to the paid plan**.
-4. **An SSH key pair:** `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519` (use a passphrase). Only the
-   `.pub` file is used by Terraform.
-5. **Your public IPv4** for `ssh_allowed_cidr` (copy `terraform.tfvars.example` to `terraform.tfvars`, which is
-   git-ignored).
-6. **Confirm** the instance type and region below.
+Only the **public newsroom application** runs on AWS (`t3.small`, `us-west-2`). Hermes, OpenClaw, the
+orchestrator and all agent credentials stay on the engineer's Mac: the agent environment is separate from the
+lightweight public app, so nothing on the VM can reach the agents' tokens, sandboxes or GitHub permissions.
+The trade-off, described in `DELIVERY.md`, is that the agents' environment is not reproduced on the VM.
+
+## Authentication and the manual steps (done once, in the console)
+
+Goal: Terraform runs with **short-lived credentials** from a **least-privilege IAM user**, with **no access
+keys**, and the account stays a Free Plan account (nothing here enables AWS Organizations).
+
+1. **Create the policy** (IAM > Policies > Create policy > JSON): paste `iam/newsroom-terraform-ec2-policy.json`
+   (EC2 actions in `us-west-2` only). Name it `NewsroomTerraformEc2UsWest2`.
+2. **Create the user** (IAM > Users > Create user): name `newsroom-terraform`; tick *Provide user access to the
+   AWS Management Console*, choose *I want to create an IAM user*, set a custom password. Attach the policies
+   `NewsroomTerraformEc2UsWest2` and the AWS-managed `SignInLocalDevelopmentAccess`. **Do not create access keys.**
+3. **Add MFA** to that user (user > Security credentials > Assign MFA device > authenticator app).
+4. **Sign in from the terminal** (the CLI is installed and a key-free profile `newsroom` exists):
+   `aws login --profile newsroom`, choose *Sign in with IAM user* in the browser (account ID or alias,
+   `newsroom-terraform`, password, MFA), and approve. The CLI refreshes the credentials for up to 12 hours.
+5. **Check the identity** without printing the account number:
+   `aws sts get-caller-identity --profile newsroom --query Arn --output text | sed 's/[0-9]\{12\}/<account>/'`
+   should end in `user/newsroom-terraform`.
+6. **SSH key** (a passphrase is recommended): `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519`.
+7. **Then**: `cd infra/aws && terraform init && terraform plan` and review before any apply.
+
+Why not the alternatives: `aws login` is AWS's documented way to get temporary credentials from console sign-in
+(CLI 2.32+), works with IAM users, and needs no stored keys. **IAM Identity Center is unsuitable**: access to
+AWS accounts through its portal needs an *organization instance*, which needs AWS Organizations, and joining
+Organizations automatically upgrades a Free Plan account to the paid plan. The **root user** is not used for
+Terraform. If `aws login` does not work with Terraform in practice, AWS documents a fallback: a second profile
+with `credential_process = aws configure export-credentials --profile newsroom --format process`.
 
 ## Secrets: nothing touches Terraform, GitHub or state
 
