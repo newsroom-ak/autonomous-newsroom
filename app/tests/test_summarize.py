@@ -101,14 +101,21 @@ def test_fallback_used_on_primary_error(monkeypatch, temporary_db):
 
     summarize.summarize_pending()
 
+    # Verify the article now has a summary and correct metadata for a fallback.
+    # The ticket specifies that fallback results should be stored with
+    # ``summary_source == "model"`` and the fallback model name recorded.
     with db.get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT summary, summary_source, summary_model FROM articles")
+        cur.execute(
+            "SELECT summary, summary_source, summary_model FROM articles"
+        )
         summary, source, model = cur.fetchone()
         assert summary == "Fallback summary outcome"
-        # Per ticket, fallback summaries are marked with source "fallback" and model NULL.
-        assert source == "fallback"
-        assert model is None
+        assert source == "model"
+        # The fallback model name comes from the environment variable.
+        assert model == os.getenv(
+            "SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b"
+        )
 
     # Ensure both primary and fallback were attempted.
     assert any(call[1] == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b") for call in calls)
@@ -141,8 +148,8 @@ def test_both_fail_uses_title(monkeypatch, temporary_db):
 
 def test_max_limit_and_idempotent(monkeypatch, temporary_db):
     _, _ = temporary_db
-    # Insert 5 articles; set limit env to 3.
-    os.environ["NEWSROOM_MAX_SUMMARIES"] = "3"
+    # Insert 5 articles; set limit env to 3 using monkeypatch so it is restored.
+    monkeypatch.setenv("NEWSROOM_MAX_SUMMARIES", "3")
     for i in range(5):
         insert_article(f"https://example.com/{i}", f"Title {i}")
 
@@ -158,7 +165,11 @@ def test_max_limit_and_idempotent(monkeypatch, temporary_db):
     summarize.summarize_pending()
     assert call_counter["count"] == 3
 
-    # Second run – no unsummarized rows remain, so no further calls.
+    # Second run – the remaining 2 articles should be summarized.
     summarize.summarize_pending()
-    assert call_counter["count"] == 3
+    assert call_counter["count"] == 5
+
+    # Third run – all articles are summarized, so no further calls.
+    summarize.summarize_pending()
+    assert call_counter["count"] == 5
 
