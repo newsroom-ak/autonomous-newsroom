@@ -20,7 +20,7 @@ import traceback
 from datetime import datetime
 from typing import List, Dict, Any
 
-from . import db, feed
+from . import db, feed, summarize
 
 
 def _run_refresh() -> None:
@@ -45,9 +45,12 @@ def _run_refresh() -> None:
                 fetched_at=article.get("fetched_at"),
                 summary=article.get("summary"),
                 topic_tag=article.get("topic_tag"),
+                # Existing columns are optional; defaults handled in upsert.
             )
             if is_new:
                 new += 1
+        # After inserting new/changed articles, run summarisation on a limited set.
+        summarize.summarize_pending()
         # Success – update the run row.
         db.update_refresh_run(
             run_id=run_id,

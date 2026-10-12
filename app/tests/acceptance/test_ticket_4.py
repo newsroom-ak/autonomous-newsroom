@@ -75,6 +75,9 @@ class TestSchema:
                 (None, "fetched_at", "TEXT", 1, None, 0),
                 (None, "summary", "TEXT", 0, None, 0),
                 (None, "topic_tag", "TEXT", 0, None, 0),
+                (None, "summary_source", "TEXT", 0, None, 0),
+                (None, "summary_model", "TEXT", 0, None, 0),
+                (None, "content_hash", "TEXT", 0, None, 0),
             ]
             # PRAGMA returns integer for notnull and pk.  The first element is
             # cid and third is type.
