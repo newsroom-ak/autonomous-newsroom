@@ -235,7 +235,7 @@ class TestRefreshBehaviour:
 
         import importlib, httpx
         monkeypatch.setattr(feed, "httpx", importlib.import_module("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0: Resp())
+        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0, **kwargs: Resp())
 
         path, conn = _setup_temp_db()
         try:
@@ -273,7 +273,7 @@ class TestRefreshBehaviour:
 
         import importlib, httpx
         monkeypatch.setattr(feed, "httpx", importlib.import_module("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0: Resp())
+        monkeypatch.setattr(feed.httpx, "get", lambda url, timeout=10.0, **kwargs: Resp())
 
         path, conn = _setup_temp_db()
         try:

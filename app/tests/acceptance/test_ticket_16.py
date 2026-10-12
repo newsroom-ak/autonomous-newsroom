@@ -62,6 +62,21 @@ def _teardown_temp_db(path: str, old_env: str | None) -> None:
     shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
 
+def _mock_get(monkeypatch, handler):
+    """Route ``feed``'s ``httpx.get`` through a real ``httpx.MockTransport``.
+
+    ``handler(request) -> httpx.Response`` produces genuine httpx responses (real URLs, headers,
+    status handling), so redirect resolution and ``raise_for_status`` behave as in production.
+    """
+    import httpx
+
+    def fake_get(url, **kwargs):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            return client.get(url, **kwargs)
+
+    monkeypatch.setattr(feed.httpx, "get", fake_get)
+
+
 def test_redirect_followed_and_user_agent_sent(monkeypatch):
     """A 302 redirect (HTTPS) is followed and the User‑Agent header is sent."""
     db_path, conn, old_env = _setup_temp_db()
@@ -70,41 +85,26 @@ def test_redirect_followed_and_user_agent_sent(monkeypatch):
         second_url = "https://news.google.com/rss/search?q=AI+ML&hl=en-US&gl=US&ceid=US:en"
         rss_body = """<?xml version='1.0'?><rss><channel><item><title>Test</title><link>https://example.com/1</link></item></channel></rss>"""
 
-        class MockResponse:
-            def __init__(self, url, status_code, headers=None, text=""):
-                self.url = url
-                self.status_code = status_code
-                self.headers = headers or {}
-                self.text = text
-
-            @property
-            def is_redirect(self) -> bool:
-                return self.status_code in (301, 302, 303, 307, 308)
-
-            def raise_for_status(self):
-                if self.status_code >= 400:
-                    raise __import__("httpx").HTTPStatusError(
-                        f"{self.status_code} error", request=None, response=self
-                    )
+        import httpx
 
         calls = []
 
-        def fake_get(url, timeout=10.0, headers=None, follow_redirects=False, **kwargs):
-            calls.append({"url": url, "headers": headers, "timeout": timeout})
-            if url == first_url:
-                return MockResponse(url, 302, {"Location": second_url})
-            if url == second_url:
-                return MockResponse(url, 200, text=rss_body)
-            raise AssertionError(f"Unexpected URL {url}")
+        def handler(request):
+            calls.append({"url": str(request.url), "headers": request.headers})
+            if str(request.url) == first_url:
+                return httpx.Response(302, headers={"Location": second_url})
+            if str(request.url) == second_url:
+                return httpx.Response(200, text=rss_body)
+            raise AssertionError(f"Unexpected URL {request.url}")
 
-        monkeypatch.setattr(feed, "httpx", __import__("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", fake_get)
+        _mock_get(monkeypatch, handler)
 
         articles = feed.fetch_articles()
         # Verify one article extracted.
         assert len(articles) == 1
         assert articles[0]["source_url"] == "https://example.com/1"
         # Verify that the User‑Agent header was sent on both requests.
+        assert [c["url"] for c in calls] == [first_url, second_url]
         for call in calls:
             assert call["headers"].get("User-Agent") == "newsroom-bot/1.0"
     finally:
@@ -116,35 +116,23 @@ def test_redirect_loop_exceeds_limit(monkeypatch):
     """More than five redirects raises an ``httpx.HTTPError``."""
     db_path, conn, old_env = _setup_temp_db()
     try:
+        import httpx
+
         base = "https://example.com/step"
+        requests_seen = []
 
-        class MockResponse:
-            def __init__(self, url, status_code, headers=None):
-                self.url = url
-                self.status_code = status_code
-                self.headers = headers or {}
+        def handler(request):
+            requests_seen.append(str(request.url))
+            return httpx.Response(302, headers={"Location": f"{base}{len(requests_seen)}"})
 
-            @property
-            def is_redirect(self) -> bool:
-                return True
-
-            def raise_for_status(self):
-                pass
-
-        def fake_get(url, timeout=10.0, headers=None, follow_redirects=False, **kwargs):
-            # Each call appends a new step number.
-            step = int(url.split("step")[-1])
-            next_step = step + 1
-            location = f"{base}{next_step}"
-            return MockResponse(url, 302, {"Location": location})
-
-        monkeypatch.setattr(feed, "httpx", __import__("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", fake_get)
+        _mock_get(monkeypatch, handler)
 
         # Starting URL will be constructed inside fetch_articles; we force it by
         # calling with a known topic that yields a predictable URL.
         with pytest.raises(__import__("httpx").HTTPError):
             feed.fetch_articles(topic="loop")
+        # One initial request plus at most five redirects.
+        assert len(requests_seen) <= 6
     finally:
         conn.close()
         _teardown_temp_db(db_path, old_env)
@@ -154,32 +142,22 @@ def test_non_https_redirect_raises(monkeypatch):
     """Redirect target not using HTTPS raises an ``httpx.HTTPError``."""
     db_path, conn, old_env = _setup_temp_db()
     try:
-        https_url = "https://example.com/start"
+        import httpx
+
         http_url = "http://example.com/target"
+        requests_seen = []
 
-        class MockResponse:
-            def __init__(self, url, status_code, headers=None):
-                self.url = url
-                self.status_code = status_code
-                self.headers = headers or {}
+        def handler(request):
+            requests_seen.append(str(request.url))
+            if request.url.scheme == "https":
+                return httpx.Response(302, headers={"Location": http_url})
+            raise AssertionError("the insecure redirect target must never be requested")
 
-            @property
-            def is_redirect(self) -> bool:
-                return True
-
-            def raise_for_status(self):
-                pass
-
-        def fake_get(url, timeout=10.0, headers=None, follow_redirects=False, **kwargs):
-            if url == https_url:
-                return MockResponse(url, 302, {"Location": http_url})
-            raise AssertionError("Unexpected GET call")
-
-        monkeypatch.setattr(feed, "httpx", __import__("httpx"))
-        monkeypatch.setattr(feed.httpx, "get", fake_get)
+        _mock_get(monkeypatch, handler)
 
         with pytest.raises(__import__("httpx").HTTPError):
             feed.fetch_articles(topic="nonhttps")
+        assert requests_seen and all(u.startswith("https://") for u in requests_seen)
     finally:
         conn.close()
         _teardown_temp_db(db_path, old_env)
@@ -190,7 +168,7 @@ def test_summary_fallback_logic(monkeypatch):
     db_path, conn, old_env = _setup_temp_db()
     try:
         # One article to summarise.
-        feed.fetch_articles = lambda: [
+        monkeypatch.setattr(feed, "fetch_articles", lambda: [
             {
                 "source_url": "https://example.com/1",
                 "title": "A" * 200,
@@ -199,13 +177,13 @@ def test_summary_fallback_logic(monkeypatch):
                 "summary": None,
                 "topic_tag": None,
             }
-        ]
+        ])
 
         call_log = []
 
         def fake_post(url, json, headers=None, timeout=None):
-            # Distinguish primary vs fallback by URL content.
-            if "primary" in os.getenv("SUMMARY_PRIMARY_URL", ""):
+            # Distinguish primary vs fallback by the model named in the request.
+            if json["model"] == "primary-model":
                 # Primary returns an unusable (whitespace) summary.
                 call_log.append("primary")
                 class Resp:
@@ -227,10 +205,10 @@ def test_summary_fallback_logic(monkeypatch):
                 return Resp()
 
         # Configure distinct URLs to let the stub differentiate.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
-        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_FALLBACK_URL", "https://fallback.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "primary-model")
+        monkeypatch.setenv("SUMMARY_FALLBACK_MODEL", "fallback-model")
 
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
@@ -280,7 +258,7 @@ def test_model_payload_uses_max_tokens_800(monkeypatch):
     """The request payload sent to the model endpoint includes ``max_tokens=800``."""
     db_path, conn, old_env = _setup_temp_db()
     try:
-        feed.fetch_articles = lambda: [
+        monkeypatch.setattr(feed, "fetch_articles", lambda: [
             {
                 "source_url": "https://example.com/1",
                 "title": "Test title",
@@ -289,7 +267,7 @@ def test_model_payload_uses_max_tokens_800(monkeypatch):
                 "summary": None,
                 "topic_tag": None,
             }
-        ]
+        ])
 
         captured = {}
 
@@ -304,12 +282,11 @@ def test_model_payload_uses_max_tokens_800(monkeypatch):
             return Resp()
 
         # Use primary model only for this test.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
-        os.environ["SUMMARY_PRIMARY_KEY"] = "key"
-        # Ensure fallback is not called.
-        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
-        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "primary-model")
+        monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "key")
+        monkeypatch.setenv("SUMMARY_FALLBACK_URL", "https://fallback.test/v1")
+        monkeypatch.setenv("SUMMARY_FALLBACK_MODEL", "fallback-model")
 
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
