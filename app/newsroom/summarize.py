@@ -115,16 +115,20 @@ def _is_usable(summary: str) -> bool:
 
 
 def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
-    """Attempt primary then fallback model, returning ``(summary, tag, source, model)``.
+    """Attempt the primary model, then the fallback, and finally the title.
 
-    *source* is ``"model"`` if a model (primary or fallback) produced a usable
-    summary, ``"fallback"`` when both models fail and the title‑based fallback
-    is used. *model* is the name of the model that supplied the usable summary,
-    or ``None`` for the final fallback.
+    The function always returns a 4‑tuple ``(summary, tag, source, model)`` where:
+
+    * ``source`` is ``"model"`` when a model supplied a usable summary, and ``"fallback"``
+      when both models failed and the title‑based fallback is used.
+    * ``model`` is the name of the model that provided the usable summary, or ``None``
+      for the final title fallback.
     """
-    prompt = f"Summarize the following article title in one short sentence (max 160 chars):\n{title}"
-    # Primary attempt
-    # Primary model attempt ----------------------------------------------------
+    prompt = (
+        f"Summarize the following article title in one short sentence (max 160 chars):\n{title}"
+    )
+
+    # Primary model attempt – any exception triggers fallback.
     try:
         raw = _call_model(
             _get_primary_url(),
@@ -136,13 +140,11 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
         if _is_usable(summary):
             tag = _extract_tag(summary)
             return summary, tag, "model", _get_primary_model()
-        # Primary produced unusable output – fall through to fallback.
-    except (httpx.HTTPStatusError, httpx.RequestError):
-        # Any HTTP error (including 402/429) or network‑related error triggers the fallback.
+    except Exception:
+        # Proceed to fallback on any error.
         pass
 
-    # Fallback attempt – treat as a successful model generation.
-    # Fallback model attempt ---------------------------------------------------
+    # Fallback model attempt – only usable summaries are accepted.
     try:
         raw = _call_model(
             _get_fallback_url(),
@@ -154,12 +156,14 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
         if _is_usable(summary):
             tag = _extract_tag(summary)
             return summary, tag, "model", _get_fallback_model()
-        # Fallback also produced unusable output – use title fallback.
     except Exception:
-        # Both primary and fallback failed – use truncated title as a non‑model fallback.
-        summary = title[:120]
-        tag = "general"
-        return summary, tag, "fallback", None
+        # Any failure means we will use the title fallback.
+        pass
+
+    # Title‑based fallback – guaranteed non‑empty summary.
+    summary = title[:120]
+    tag = "general"
+    return summary, tag, "fallback", None
 
 
 def summarize_pending() -> None:

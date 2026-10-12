@@ -91,8 +91,13 @@ def fetch_articles(topic: str | None = None) -> List[Dict[str, Any]]:
         if not location:
             raise httpx.HTTPError("Redirect response missing Location header")
         # Resolve relative redirects.
+        # Resolve the Location header against the current URL. ``httpx.URL``
+        # does not accept a ``base`` argument, so we use the ``join`` method to
+        # correctly handle relative redirects.
         from httpx import URL
-        next_url = URL(location, base=resp.url)
+        # ``resp.url`` is a ``httpx.URL``; ``join`` resolves ``location``
+        # relative to it, producing a new ``URL`` instance.
+        next_url = resp.url.join(location)
         if next_url.scheme != "https":
             raise httpx.HTTPError("Redirect target is not HTTPS")
         # Follow the next hop with the same headers.
