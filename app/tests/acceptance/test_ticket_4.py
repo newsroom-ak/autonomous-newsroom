@@ -337,15 +337,16 @@ class TestRefreshBehaviour:
         """
         called = {}
 
-        def fake_get(url: str, timeout: float = 10.0):  # pragma: no cover
-            called["url"] = url
-            called["timeout"] = timeout
-            class Resp:
-                status_code = 200
-                text = "<rss></rss>"
-                def raise_for_status(self):
-                    pass
-            return Resp()
+    def fake_get(url: str, timeout: float = 10.0, **kwargs):  # pragma: no cover
+        # Capture the URL and timeout; ignore any extra kwargs (e.g., headers, follow_redirects).
+        called["url"] = url
+        called["timeout"] = timeout
+        class Resp:
+            status_code = 200
+            text = "<rss></rss>"
+            def raise_for_status(self):
+                pass
+        return Resp()
 
         monkeypatch.setattr(feed, "httpx", importlib.import_module("httpx"))
         monkeypatch.setattr(feed.httpx, "get", fake_get)
