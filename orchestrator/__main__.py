@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("ticket", type=int)
     pt.add_argument("--from", dest="source", required=True, help="tester-written test file to publish verbatim")
     pt.add_argument("--written-in", required=True, help="tester session(s) and model that wrote the file")
+    pt.add_argument("--update", action="append", default=[], metavar="REL=FILE",
+                    help="tester-written update to an earlier acceptance file, e.g. app/tests/acceptance/test_ticket_4.py=/path")
     sub.add_parser("verify").add_argument("ticket", type=int)
     sub.add_parser("step")
     r = sub.add_parser("run")
@@ -67,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,
                         max_turns=args.max_turns))
     elif args.cmd == "publish-tests":
-        print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in))
+        updates = {rel: open(src).read() for rel, src in (u.split("=", 1) for u in args.update)}
+        print(orch.publish_tests(args.ticket, open(args.source).read(), args.written_in, updates=updates))
     elif args.cmd == "verify":
         print(orch.verify(args.ticket))
     elif args.cmd == "step":

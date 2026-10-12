@@ -101,7 +101,8 @@ with your summary.
 
 TEST_MESSAGE = """\
 New handoff from reviewer: pull request #{pr} for ticket #{ticket} passed review.
-Read TICKET.md, read the implementation under repo/app/, and write acceptance/test_acceptance.py.
+Read TICKET.md, read the implementation under repo/app/, and write your new tests to the file
+acceptance/test_acceptance.py at the top of your workspace (NOT inside repo/).
 Earlier tickets' acceptance tests are in repo/app/tests/acceptance/. If one of them fails only because
 this ticket legitimately extends behaviour (for example, it adds database columns), you may minimally
 update that file in place so it still checks its own ticket's acceptance criteria. Never weaken a real
@@ -484,6 +485,12 @@ class Orchestrator:
         session = f"ticket-{ticket}-test-{attempt}" + ("-recheck" if focus else "")
         reply = self._openclaw("tester", message, session=session, ticket=ticket, max_turns=max_turns, model=model)
         test_bytes = workspace.read_agent_file(ws, acc / "test_acceptance.py")
+        misplaced = ws / "repo" / ACCEPTANCE_DIR / "test_acceptance.py"
+        if test_bytes is None and misplaced.is_file():
+            # Seen on ticket #5: the tester wrote its new file next to the earlier acceptance tests.
+            test_bytes = workspace.read_agent_file(ws, misplaced)
+            ledger.append(Event(event="test-file-location", agent="tester", runtime="harness", ticket=ticket,
+                                outcome="misplaced", detail=f"used {misplaced.relative_to(ws)}"))
         # A budget-stopped run still counts if it produced a new test file. In a plain re-run
         # (kept tests, no focus) the tester may legitimately leave its tests unchanged.
         produced = test_bytes is not None and (seed is None or test_bytes != seed or not focus)
