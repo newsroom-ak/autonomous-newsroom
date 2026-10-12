@@ -56,12 +56,18 @@ You are assigning the next ticket to the builder agent.
 Board (only tickets whose dependencies are merged are listed as candidates):
 {board}
 
+Full text of each candidate ticket (its acceptance criteria are binding):
+{details}
+
 Feedback on candidates that were sent back by review or test:
 {feedback}
 
 Return ONLY a JSON object:
 {{"ticket": <issue number from the candidates>, "reason": "<one sentence>",
   "instructions": ["<what the builder must do or fix, at most 5 bullet points>"]}}
+
+Instructions must be consistent with the chosen ticket's acceptance criteria and file list.
+Do not invent requirements, file paths or providers that the ticket does not state.
 """
 
 REVIEW_PROMPT = """\
@@ -226,7 +232,8 @@ class Orchestrator:
             for t in tickets if t["state"] == "OPEN"
         )
         feedback = self._feedback_for(candidates)
-        prompt = ASSIGN_PROMPT.format(board=board, feedback=feedback or "none")
+        details = "\n\n".join(f"#{t['number']}: {t['title']}\n{(t.get('body') or '')[:4000]}" for t in candidates)
+        prompt = ASSIGN_PROMPT.format(board=board, details=details, feedback=feedback or "none")
         valid = {t["number"] for t in candidates}
         for ask in range(2):
             reply = self._hermes("dispatch", prompt)
@@ -644,7 +651,9 @@ def validate_review(data: dict) -> dict:
 def render_ticket(issue: dict, instructions: list[str], feedback: str, attempt: int) -> str:
     parts = [f"# Ticket #{issue['number']}: {issue['title']}", f"Attempt: {attempt}", "", issue["body"]]
     if instructions:
-        parts += ["", "## Instructions from dispatch", *[f"- {i}" for i in instructions]]
+        parts += ["", "## Instructions from dispatch",
+                  "(If an instruction conflicts with the acceptance criteria above, the acceptance criteria win.)",
+                  *[f"- {i}" for i in instructions]]
     if feedback:
         parts += ["", "## Feedback from the previous attempt (fix every point)", feedback]
     return "\n".join(parts) + "\n"

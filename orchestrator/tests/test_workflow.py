@@ -124,6 +124,7 @@ def test_assign_only_offers_tickets_whose_dependencies_are_merged(env, monkeypat
     assert orch.assign() == 1
     assert "#1 [status:todo] Schema (CANDIDATE)" in prompts[0]
     assert "#2 [status:todo] Collector (CANDIDATE)" not in prompts[0]
+    assert "table exists" in prompts[0]  # candidate's acceptance criteria are in the prompt
     assert "status:assigned" in fake.issues[1]["labels"]
 
 
