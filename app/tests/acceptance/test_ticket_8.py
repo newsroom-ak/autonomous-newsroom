@@ -74,39 +74,54 @@ def _reset_env():
 
 
 def test_scheduler_immediate_refresh_creates_run(monkeypatch):
-    """FastAPI startup should trigger an immediate refresh run.
+    """FastAPI startup should trigger a *single* immediate refresh run.
 
-    The test disables the background loop (``NEWSROOM_DISABLE_SCHEDULER=1``) to
-    keep the process deterministic and verifies that exactly one ``refresh_runs``
-    row is inserted.
+    The scheduler must not be disabled – the flag ``NEWSROOM_DISABLE_SCHEDULER``
+    disables all refreshes (covered by ``test_scheduler_can_be_disabled``), so we
+    ensure it is **not** set. The background loop is started by ``scheduler.startup``
+    but we patch ``scheduler.sleep`` to wait forever, so after the immediate refresh
+    the task never wakes to perform another run. The whole lifecycle is driven
+    inside one event loop to avoid the premature cancellation issue described by
+    the reviewer.
     """
     db_path, old = _setup_temp_db()
     try:
-        # Ensure the scheduler is disabled after the immediate run.
-        monkeypatch.setenv("NEWSROOM_DISABLE_SCHEDULER", "1")
+        # Ensure the disabling flag is absent.
+        monkeypatch.delenv("NEWSROOM_DISABLE_SCHEDULER", raising=False)
 
-        # Use a fake refresh that simply records a row – no network.
+        # Fake refresh that records a row.
         def fake_refresh():
             db.insert_refresh_run(started_at=datetime.utcnow().isoformat(), status="success")
 
         monkeypatch.setattr(scheduler, "refresh_callable", fake_refresh)
 
-        # Run the startup coroutine.
-        asyncio.run(scheduler.startup())
-        # Immediate refresh should have inserted one row.
+        # Patch ``sleep`` so the background loop never proceeds after the first run.
+        async def forever_sleep(_: float):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(scheduler, "sleep", forever_sleep)
+
+        async def scenario():
+            await scheduler.startup()
+            # Give the background task a tiny slice of time – it will perform the
+            # immediate refresh and then hit the forever sleep.
+            await asyncio.sleep(0.05)
+            await scheduler.shutdown()
+
+        asyncio.run(scenario())
+        # Exactly one refresh run should have been recorded.
         assert _refresh_run_count() == 1
     finally:
-        # Clean up.
-        asyncio.run(scheduler.shutdown())
         _teardown_temp_db(db_path, old)
 
 
 def test_scheduler_interval_triggers_additional_refresh(monkeypatch):
-    """After the immediate run, the background loop should invoke the refresh again.
+    """After the immediate run, the background loop should invoke the refresh **once** more.
 
-    The ``sleep`` function is patched to return quickly on the first call and then
-    raise ``CancelledError`` on the second call, causing the background task to
-    exit after performing a second refresh.
+    The test patches ``scheduler.sleep`` so that the first sleep returns
+    instantly (allowing a second refresh) and the second sleep blocks forever.
+    The whole sequence runs inside a single event loop, matching the reviewer’s
+    ``scenario`` pattern.
     """
     db_path, old = _setup_temp_db()
     try:
@@ -121,23 +136,31 @@ def test_scheduler_interval_triggers_additional_refresh(monkeypatch):
 
         monkeypatch.setattr(scheduler, "refresh_callable", fake_refresh)
 
-        # Patch ``sleep`` to control the loop.
+        # Control the sleep behaviour.
         sleep_calls = {"n": 0}
 
-        async def fake_sleep(seconds: float):
+        async def controlled_sleep(_: float):
             sleep_calls["n"] += 1
             if sleep_calls["n"] == 1:
-                return  # first sleep – allow next iteration quickly
-            raise asyncio.CancelledError()  # second sleep – stop the loop
+                # First sleep – return instantly to trigger the second refresh.
+                return
+            # Subsequent sleeps – block forever so the loop ends only when shutdown
+            # cancels the task.
+            await asyncio.Event().wait()
 
-        monkeypatch.setattr(scheduler, "sleep", fake_sleep)
+        monkeypatch.setattr(scheduler, "sleep", controlled_sleep)
 
-        # Run startup which performs the immediate refresh and starts background.
-        asyncio.run(scheduler.startup())
-        # Shutdown will cancel any still‑running background task.
-        asyncio.run(scheduler.shutdown())
+        async def scenario():
+            await scheduler.startup()
+            # Allow the background task to run the immediate refresh and then the
+            # first controlled sleep (which returns instantly), causing a second
+            # refresh. After that it will hit the forever‑sleep branch.
+            await asyncio.sleep(0.05)
+            await scheduler.shutdown()
 
-        # Expect two refreshes: immediate + one after the first sleep.
+        asyncio.run(scenario())
+
+        # Expect two refreshes: immediate + one after the first quick sleep.
         assert call_counter["count"] == 2
         assert _refresh_run_count() == 2
     finally:
