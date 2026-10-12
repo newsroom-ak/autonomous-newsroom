@@ -5,8 +5,8 @@
 | **Live newsroom** | https://beach-educated-counts-ray.trycloudflare.com *(Cloudflare Quick Tunnel to the author's Mac; see [Hosting](#6-infrastructure-and-hosting) for its limits)* |
 | **Repository** | https://github.com/newsroom-ak/autonomous-newsroom (public) |
 | **Product** | A news page on "latest AI/ML news": real Google News RSS, model-written one-line summaries and tags, SQLite, "updated X ago", refreshed on a schedule |
-| **Who wrote what** | `app/` was written by OpenClaw agents (builder and tester) through GitHub tickets and PRs. `orchestrator/`, `agents/` prompts, `scripts/`, `deploy/`, `infra/` and the docs were written by the human with Claude Code assistance (see [section 9](#9-human-involvement-and-disclosures)) |
-| **State at hand-over** | Tickets #4, #5, #6, #7, #8 and the live-test bug #16 are merged and the app runs. Oracle Cloud provisioning did **not** complete (host capacity); the Quick Tunnel fallback is used. |
+| **Who wrote what** | `app/` was written by OpenClaw agents (builder and tester) through GitHub tickets and PRs. `orchestrator/`, `agents/` prompts and configuration snapshots, `scripts/`, `deploy/`, `infra/` and the docs were written by the human with Claude Code assistance (see [section 9](#9-human-involvement-and-disclosures)) |
+| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged, and the app runs publicly through a Cloudflare Quick Tunnel from the author's Mac. **Oracle Cloud provisioning failed on host capacity (confirmed).** The intended final design, agents on the Mac and the public app on an AWS `t3.small` in `us-west-2`, is **not deployed**: the AWS account's verification and sign-in are still pending (see [section 6](#6-infrastructure-and-hosting)). |
 
 Every number below comes from `docs/evidence/ledger.jsonl` (the harness's own log), GitHub, or a command run
 for this report. Where something is an estimate or an interpretation, it says so.
@@ -20,14 +20,15 @@ for this report. Where something is an estimate or an interpretation, it says so
 | OpenClaw **and** Hermes, both used, with orchestrator, builder, reviewer, tester | ✅ | [Roster](#2-agent-roster) |
 | Tickets flow through something inspectable; review and test can send work back | ✅ | GitHub issues #4–#8, #16; PRs #9, #11, #13, #14, #15, #17; [rejections](#5-what-broke-and-how-it-was-handled) |
 | Agents write the code; git history shows agent-authored commits | ✅ for `app/` | 30 agent commits on `main` (17 builder, 13 tester); [section 3](#3-what-each-agent-actually-did) |
-| Free stack: free VM provisioned with Terraform, free models | ⚠️ partial | Terraform exists (`infra/`) but **the VM was never created** (Oracle "out of host capacity"). Models: Ollama Cloud free plan only. |
+| Free stack: free VM provisioned with Terraform, free models | ⚠️ partial | Oracle Terraform exists (`infra/`) but **no VM was ever created** (confirmed host-capacity failure, [section 6](#6-infrastructure-and-hosting)). AWS plan B is drafted but **not deployed** (account verification pending). Models: Ollama Cloud free plan only. |
 | Public URL that loads and does the core thing | ✅ with limits | Quick Tunnel; URL changes if the tunnel restarts; the Mac must stay on |
 | Page: ~10 articles, one-line summary, topic tag, source link, "updated X ago" | ✅ | Verified live: 10 articles, none empty, model-written summaries |
-| Scheduled refresh, stored in a database | ✅ | In-app scheduler (startup + every 180 min), SQLite |
+| Scheduled refresh, stored in a database | ✅ | In-app scheduler (startup + every 180 min), SQLite. **Verified live:** the second refresh fired on its own exactly 180 minutes after the first ([section 8](#8-quality-gates-in-practice)) |
 | Summarize once, fall back to a second free model on 402/429 | ✅ | Verified live (HTTP 402 from `kimi-k3` triggers the fallback); title fallback is marked as such |
-| Token and model report | ✅ | [Section 4](#4-token-and-model-report) (with caveats on what the totals mean) |
+| `agents/` with each agent's config, prompts and skills (secrets removed) | ✅ | Prompts, `agents/team.json`, and sanitized Hermes/OpenClaw snapshots with provenance in `agents/SNAPSHOT.md` |
+| Token and model report | ✅ | [Section 4](#4-token-and-model-report), including a cross-check against Hermes's own usage records |
 | Trace excerpts, reproduce instructions | ✅ | [Section 7](#7-trace-excerpts), [section 10](#10-reproduce) |
-| Reproduce with `terraform apply` + one install script | ❌ | No VM was ever created, so there is no Linux install script. The Mac-based procedure is in section 10. |
+| Reproduce with `terraform apply` + one install script | ❌ | No VM was created, so nothing was reproduced from a `terraform apply`. The Mac-based procedure is in [section 10](#10-reproduce); an AWS Terraform proposal exists but is unapplied. |
 
 ---
 
@@ -41,6 +42,8 @@ for this report. Where something is an estimate or an interpretation, it says so
 | **reviewer** | Hermes, profile `reviewer` | Reads the PR diff, committed tests and pytest output against the ticket; approves or requests changes | `ollama-cloud/nemotron-3-super` | `todo` only |
 | *orchestrator harness* | Python (`orchestrator/`), **not an agent** | Plumbing only: git checkouts, GitHub calls with each agent's own token, the offline test container, the token ledger | none | Deterministic. It never chooses a ticket, writes product code or decides a verdict. |
 | *human* | `Ankita2525` | Product owner; reviews and merges | – | Only account that can approve or bypass the ruleset |
+
+Configuration, prompts and "skills" for every agent are in `agents/` (see `agents/SNAPSHOT.md`); no custom skills were written. Hermes `delegate_task` and the OpenRouter per-agent keys were not used.
 
 Local Ollama models (`qwen2.5:7b`, `llama3.1:8b`) were tried in early rehearsals, before any real ticket, and
 rejected: they could not produce valid plans, assignments or tool calls. Fallback chains still list more Ollama
@@ -168,13 +171,42 @@ Excluding the three aborted runs, the whole project used **6,879,475** reported 
   8,222 input + 9,126 output but a total of 257,476. Our interpretation (not confirmed by OpenClaw's
   documentation) is that the total counts the full prompt (system prompt, tool schemas, history; about 7–11K
   tokens) again on every model request, so it grows with the number of requests. Treat OpenClaw totals as a
-  consistent *relative* measure of work, not a bill. Hermes totals are closer to input + output.
+  consistent *relative* measure of work, not a bill. Hermes totals are close to input + output plus its automatic title call (cross-check below).
 - **The aborted runs' numbers are partial.** They are what the runtime returned when the deadline hit.
 - **One run has no usage record.** Ticket #7's builder attempt 3 hit its deadline and OpenClaw returned no
   usage; the ledger records it as 0 although it did consume tokens (unknown).
-- `openclaw gateway usage-cost` returned zeros for this profile, so there was no second source.
+- `openclaw gateway usage-cost` returned zeros for this profile, so **OpenClaw numbers have no second source**; only the Hermes numbers could be cross-checked (next subsection).
 - **Turn budgets were advisory.** "Max turns" was a prompt hint plus a wall-clock deadline; runs routinely
   exceeded it (for example 27 requests against a budget of 12).
+
+### Cross-check of the Hermes numbers against Hermes's own records
+
+The brief points to `hermes insights` for token tracking. We compared it, and Hermes's session exports, with
+the ledger. Hermes sessions were matched to ledger runs by start time (every pair within 8.5 s).
+
+| | Ledger runs | Hermes sessions | Paired | Ledger tokens | Paired sessions' in+out | `hermes insights` total |
+|---|---:|---:|---:|---:|---:|---:|
+| reviewer | 11 | 11 | 11 | 165,116 | 152,526 | 165,404 |
+| dispatch | 17 | 22 | 17 | 80,419 | 71,997 | 100,713 |
+
+What explains the differences (measured, not guessed):
+
+1. **Ledger vs session in+out (+12,590 reviewer, +8,422 dispatch):** the ledger records the Hermes usage
+   report's `total_including_auxiliary`, which adds the automatic title-generation calls that the session
+   tables leave out.
+2. **Reviewer, `insights` vs ledger (+288, 0.17%):** `insights` also counts those auxiliary sessions, some run
+   on other models (`gpt-oss:120b` 1,424; `llama3.1:8b` 501 tokens). Not itemized further.
+3. **Dispatch, five sessions that are in Hermes but not in the ledger (19,007 tokens in+out, about 0.12% of the
+   15.27M total):** four on the local `llama3.1:8b` (16,684 tokens) and one on `nemotron-3-ultra` (2,323 tokens,
+   a connectivity check). All five started before the first real planning call (about 15:19 local time on
+   Oct 11) and were verification and rehearsal sessions run by the engineer outside the orchestrator, so they
+   never produced product work and were never ledgered.
+4. **Dispatch, `insights` 100,713 vs ledger 80,419 plus the unledgered 19,007 = 99,426:** a residual of 1,287
+   tokens (1.3%) that we did not itemize; it is probably auxiliary calls for those extra sessions, but that is an
+   inference.
+
+We did not add any estimate for the missing OpenClaw usage record (ticket #7, attempt 3) or for the unledgered
+sessions to the totals above; the report states only what the runtimes reported.
 
 ---
 
@@ -209,22 +241,61 @@ re-runs; the reviewer is a weaker second gate (see improvements).
 
 ## 6. Infrastructure and hosting
 
-- **Oracle Cloud Always Free (Terraform) did not complete.** `infra/` holds a Terraform configuration for one
-  `VM.Standard.A1.Flex` instance. The network resources (VCN, subnet, internet gateway, route table, security
-  list) were created, but instance creation failed with *Out of host capacity* in the home region. The local
-  state (git-ignored, never committed) still describes those five network resources. No retry succeeded, and
-  the state was not modified during delivery.
-- **Fallback used: Cloudflare Quick Tunnel from the author's Mac** (the brief's documented emergency
-  fallback). `deploy/run-newsroom.sh` serves the merged app from an immutable `git archive` in a hardened
-  container bound to `127.0.0.1:8000` and points `cloudflared` at that single port.
-- **Limitations of this hosting:** the `trycloudflare.com` URL changes whenever the tunnel restarts; the Mac
-  must stay awake and online; Quick Tunnels have no uptime guarantee.
+### Oracle Cloud Always Free: confirmed capacity failure
+
+`infra/` holds the Terraform for one `VM.Standard.A1.Flex` instance. Its five network resources were created
+(they cost nothing); the instance never was. What was checked, read-only, against Oracle's own records:
+
+- **Two launch attempts, both failed.** Oracle's audit log shows `LaunchInstance` at 18:31:29Z and 18:34:27Z on
+  Oct 11, each HTTP 500 `InternalError`. Oracle's documentation describes that error as "Out of host capacity".
+  The Terraform console text was not retained, so the wording itself is documented rather than recorded.
+- **Not a quota or configuration problem:** the tenancy limits exceed the request with nothing used; the shapes
+  are offered; the image was found; no fault domain is pinned. The home region `us-sanjose-1` has **a single
+  availability domain** (with 3 fault domains), so the brief's "try another availability domain" is not
+  possible here.
+- **Oracle's capacity-report API** (a pre-check that provisions nothing) returned `OUT_OF_HOST_CAPACITY` for
+  `A1.Flex` at 1 OCPU / 6 GB, `A1.Flex` at 2 OCPU / 12 GB, and `E2.1.Micro`. No instance or capacity reservation
+  exists, and the Terraform state was not changed.
+- **The brief's playbook:** other AD (not available), no fault-domain pin (already so), 1 OCPU / 6 GB (checked
+  through the report, never launched), retry later (not done over a sustained period: less than a day had
+  passed when plan B was chosen, so the brief's "still blocked after a day" condition was **not** strictly
+  met; this was a deliberate decision, not a finding that Oracle stays full).
+
+### Architecture decision and AWS (plan B): pending, not deployed
+
+The agent environment (Hermes, OpenClaw, the orchestrator and every agent credential) stays on the author's
+Mac. Only the lightweight public application (FastAPI + SQLite + Caddy) is meant to run on a cloud VM:
+**AWS EC2 `t3.small` in `us-west-2`**, provisioned with Terraform. The trade-off is that the VM does not
+reproduce the agent environment; it hosts only what the public needs, and nothing on it can reach agent tokens
+or sandboxes.
+
+- **Why `t3.small`, not the brief's `m7i-flex.large`:** the app uses about 60 MB of memory; `m7i-flex.large`
+  costs $0.0958/hr (about $70/month) so the $100 Free Plan credit would last about 40 days, after which the
+  account closes, whereas `t3.small` lasts about 149 days. Both are Free-Plan eligible per AWS's documentation.
+- **What exists:** a Terraform proposal (one instance in the default VPC, one security group, one key pair, one
+  Elastic IP, Caddy for HTTPS, systemd units, no IAM role, no secrets in Terraform) drafted and validated
+  offline, with its bootstrap rehearsed in a clean Ubuntu 24.04 container. It lives on a separate branch
+  (`infra/aws-plan-b`) and is **not part of this repository snapshot or this PR**. Nothing was applied.
+- **Where it stands:** the AWS Free Plan account is created and active, but **no AWS resource and no access key
+  exists.** In the new AWS "Team" experience an IAM user cannot be given a console password; `aws login` and
+  `aws login --remote` did not complete (the browser showed "Something went wrong" instead of the session
+  picker), and AWS CloudShell reports "Your account verification is in progress. This may take up to two days
+  for new accounts." The author stopped authentication attempts until verification completes.
+- **Do not read the AWS work as a deployment.** The only public deployment is the Quick Tunnel below.
+
+### Current public deployment: Cloudflare Quick Tunnel from the author's Mac
+
+- `deploy/run-newsroom.sh` serves the merged app from an immutable `git archive` in a hardened container bound
+  to `127.0.0.1:8000` and points `cloudflared` at that single port (the brief's documented emergency fallback).
+- **Verified running code:** byte-identical to `app/` on `main` at `f3349a0` (`app/` is unchanged on `main`
+  since). The container has run continuously since 2026-10-12 02:31Z.
+- **Limitations:** the `trycloudflare.com` URL changes whenever the tunnel restarts; the Mac must stay awake and
+  online; Quick Tunnels have no uptime guarantee.
 - **Exposure checks before the URL was shared** (local and through the tunnel): loopback-only port binding;
   only `/`, `/api/articles` and FastAPI's auto-generated `/docs`, `/redoc`, `/openapi.json` are served; writes
   return 405; probe and traversal paths return 404; exact-match scans of every response found none of the
   env values, the four GitHub tokens or the OpenClaw gateway token; requests with `Host:` headers for the
-  OpenClaw gateway, Ollama and the Docker port return 403. The running code was verified **byte-identical** to
-  `app/` on `main` at `f3349a0`.
+  OpenClaw gateway, Ollama and the Docker port return 403.
 - **Agent runtimes:** OpenClaw's gateway is loopback-only with token authentication; Hermes has no listener.
   Neither is reachable through the tunnel.
 
@@ -286,18 +357,31 @@ written its tests to a path the harness did not expect.
 | Six agent-authored PRs | Each merged with `agent/review` **and** `agent/test` = success on the merged head commit, approval by the human |
 | Tests run offline | Builder and tester tests ran in a container with `--network none`, read-only root, no capabilities, no tokens |
 
+### Independent product verification (read-only checks, 2026-10-11 evening PDT)
+
+| Check | Result |
+|---|---|
+| Product tests on `main`, offline container | **38 passed** (builder and tester tests from tickets #4-#8 and #16) |
+| Harness tests | **37 passed** |
+| Secrets and forbidden files tracked on `main` | none found (token patterns, key blocks, cloud IDs; no state, tfvars, env, token, ledger or database files) |
+| Live site | HTTP 200; 10 articles in the API; the page shows real headlines, model-written summaries, tags, source links and "updated N minutes ago" |
+| **Scheduled refresh, live** | `refresh_runs` has two rows. Run 1 started at startup (02:31:28Z, 100 fetched, 100 new). **Run 2 started on its own at 05:32:52Z, exactly 180 minutes after run 1 finished** (02:32:52Z): 100 fetched, **6 new** (94 duplicates skipped by the unique source URL). |
+| Summaries, live | 105 articles stored; 24 summarized (the per-refresh cap of 12 applied twice): 23 `model` (`gpt-oss:20b`), 1 title `fallback`; none empty |
+
 ---
 
 ## 9. Human involvement and disclosures
 
-**Administrative bypass merges.** PRs #2, #3, #10 and #12 (and #18, #19, #20 once merged) are human-written, post
-no agent checks, and were merged by `Ankita2525` through the ruleset's pull-request bypass, the only way to
-merge a PR with no `agent/*` statuses. All six agent-authored PRs (#9, #11, #13, #14, #15, #17) merged
+**Administrative bypass merges.** PRs #2, #3, #10, #12 and #18 are human-written, have no `agent/*` statuses on
+their head commits (checked on GitHub), and were merged by `Ankita2525` through the ruleset's pull-request
+bypass, the only way to merge a PR with no `agent/*` statuses. PRs #19 and #20 are in the same position and
+need the same approval. All six agent-authored PRs (#9, #11, #13, #14, #15, #17) merged
 normally with both statuses green. Branch protection was never disabled.
 
 **Written by the human with Claude Code (AI assistance), not by the agents:** `orchestrator/` (the harness and
 its tests), `agents/` prompts and configuration, `scripts/`, `docker/test-runner/`, `deploy/`, `infra/`,
-`docs/`, and this report. The product brief (`agents/shared/brief.md`) is human-written.
+`docs/`, the agent configuration snapshots (generated by `scripts/snapshot_agent_configs.py`), and this report.
+The product brief (`agents/shared/brief.md`) is human-written.
 
 **Human actions on agent work (all recorded on the GitHub tickets/PRs):**
 - Added acceptance criteria and clarifications to #5, #6, #7, #8 before or after assignment (labelled as the
@@ -322,7 +406,7 @@ convention, not enforced by GitHub.
 
 ## 10. Reproduce
 
-This is a Mac-based procedure; there is no one-command Linux install because the Oracle VM was never created.
+This is a Mac-based procedure; there is no one-command Linux install because no VM was created (Oracle: no capacity; AWS: pending verification).
 
 1. **Prerequisites:** Docker Desktop, Node 24.16+ or 26, `uv`, `gh`, Python 3.13+, `terraform` (for `infra/`
    only), `brew install cloudflared`, a free Ollama Cloud API key, and four fine-grained GitHub tokens on a
@@ -340,8 +424,11 @@ This is a Mac-based procedure; there is no one-command Linux install because the
 6. **Deploy:** `deploy/run-newsroom.sh origin/main` (waits up to 5 minutes for the first refresh, then opens the
    tunnel and prints the URL).
 7. **Harness tests:** `uv run --python 3.14 --with pytest python -m pytest -q orchestrator/tests`.
-8. **Oracle (optional, not completed):** `infra/` with `terraform.tfvars` from the example; expect the capacity
-   error until Oracle has Arm capacity in the home region.
+   **Agent configuration snapshots:** `python3 scripts/snapshot_agent_configs.py` regenerates them (sanitized).
+8. **Oracle (not completed):** `infra/` with `terraform.tfvars` from the example; expect the capacity error
+   until Oracle has capacity in `us-sanjose-1` (check first with Oracle's compute capacity-report API).
+9. **AWS (proposed, not applied):** see the drafted Terraform on the `infra/aws-plan-b` branch; it needs an
+   AWS CLI session with EC2 rights, which was not available at hand-over.
 
 ---
 
@@ -354,6 +441,10 @@ This is a Mac-based procedure; there is no one-command Linux install because the
 - **Topic tags are weak:** the first word of the summary, as the ticket specified ("find", "one", "ai").
 - **800 completion tokens is marginal for reasoning models**; some articles fall back to the marked title.
 - **Hosting:** the URL changes if the tunnel restarts; the Mac must stay awake; no uptime guarantee.
+- **No Terraform-created VM exists** (Oracle: no capacity; AWS: verification pending), the weakest part of the
+  infrastructure-as-code criterion.
+- **Token ledger gaps:** one OpenClaw run has no usage record, five Hermes verification sessions (19,007 tokens)
+  are not in the ledger, and OpenClaw totals have no independent source (section 4).
 - **Builder's own `test_scheduler.py`** starts and stops the scheduler in separate event loops, so it checks less
   than it looks like; the tester's acceptance tests cover the real behaviour.
 - **No request cap on agent runs** and advisory turn budgets (see section 4).
