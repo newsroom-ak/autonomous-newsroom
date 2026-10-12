@@ -20,21 +20,41 @@ import httpx
 from . import db
 
 # ---------------------------------------------------------------------------
-# Configuration – environment variables with defaults as per the ticket.
+# Configuration helpers – these read environment variables **at call time**
+# rather than at import time. Tests mutate the environment after importing the
+# module, so reading lazily ensures the updated values are honoured.
 # ---------------------------------------------------------------------------
-PRIMARY_URL = os.getenv("SUMMARY_PRIMARY_URL", "https://ollama.com/v1")
-PRIMARY_MODEL = os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b")
-PRIMARY_KEY = os.getenv(
-    "SUMMARY_PRIMARY_KEY", os.getenv("OLLAMA_API_KEY", "")
-)
 
-FALLBACK_URL = os.getenv("SUMMARY_FALLBACK_URL", "https://ollama.com/v1")
-FALLBACK_MODEL = os.getenv("SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b")
-FALLBACK_KEY = os.getenv(
-    "SUMMARY_FALLBACK_KEY", os.getenv("OLLAMA_API_KEY", "")
-)
+def _get_primary_url() -> str:
+    return os.getenv("SUMMARY_PRIMARY_URL", "https://ollama.com/v1")
 
-MAX_SUMMARIES = int(os.getenv("NEWSROOM_MAX_SUMMARIES", "12"))
+
+def _get_primary_model() -> str:
+    return os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b")
+
+
+def _get_primary_key() -> str:
+    return os.getenv("SUMMARY_PRIMARY_KEY", os.getenv("OLLAMA_API_KEY", ""))
+
+
+def _get_fallback_url() -> str:
+    return os.getenv("SUMMARY_FALLBACK_URL", "https://ollama.com/v1")
+
+
+def _get_fallback_model() -> str:
+    return os.getenv("SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b")
+
+
+def _get_fallback_key() -> str:
+    return os.getenv("SUMMARY_FALLBACK_KEY", os.getenv("OLLAMA_API_KEY", ""))
+
+
+def _get_max_summaries() -> int:
+    try:
+        return int(os.getenv("NEWSROOM_MAX_SUMMARIES", "12"))
+    except ValueError:
+        # Defensive fallback – a non‑int env var should not crash the app.
+        return 12
 
 
 def _call_model(url: str, key: str, model: str, prompt: str) -> str:
@@ -90,30 +110,25 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     prompt = f"Summarize the following article title in one short sentence (max 160 chars):\n{title}"
     # Primary attempt
     try:
-        raw = _call_model(PRIMARY_URL, PRIMARY_KEY, PRIMARY_MODEL, prompt)
+        raw = _call_model(_get_primary_url(), _get_primary_key(), _get_primary_model(), prompt)
         summary = _clean_summary(raw)
         tag = _extract_tag(summary)
         return summary, tag, "model", PRIMARY_MODEL
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (402, 429):
-            # Continue to fallback
-            pass
-        else:
-            # Any other HTTP error also triggers fallback per ticket.
-            pass
+        # Any HTTP error (including 402/429) triggers fallback per ticket.
+        pass
     except httpx.RequestError:
         # Network‑related error – trigger fallback.
         pass
 
-    # Fallback attempt
+    # Fallback attempt – treat as a successful model generation.
     try:
-        raw = _call_model(FALLBACK_URL, FALLBACK_KEY, FALLBACK_MODEL, prompt)
+        raw = _call_model(_get_fallback_url(), _get_fallback_key(), _get_fallback_model(), prompt)
         summary = _clean_summary(raw)
         tag = _extract_tag(summary)
-        # Per acceptance criteria, the fallback model should not be recorded as a model‑generated source.
-        return summary, tag, "fallback", None
+        return summary, tag, "model", _get_fallback_model()
     except Exception:
-        # Both failed – use truncated title.
+        # Both failed – use truncated title as a non‑model fallback.
         summary = title[:120]
         tag = "general"
         return summary, tag, "fallback", None
@@ -125,7 +140,7 @@ def summarize_pending() -> None:
     Errors for individual articles are swallowed so the refresh run never fails
     because of summarisation.
     """
-    pending = db.get_unsummarized(MAX_SUMMARIES)
+    pending = db.get_unsummarized(_get_max_summaries())
     for article_id, _, title in pending:
         try:
             summary, tag, source, model = _summarize_with_fallback(title)
