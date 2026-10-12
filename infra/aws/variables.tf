@@ -1,7 +1,7 @@
 variable "region" {
-  description = "AWS region. us-west-2 offers every Free Plan instance type below at the same price as us-east-1."
+  description = "AWS region. us-east-2 (Ohio) is the region AWS assigned to this Free Plan project; Oregon (us-west-2) is unavailable without upgrading."
   type        = string
-  default     = "us-west-2"
+  default     = "us-east-2"
 }
 
 variable "aws_profile" {

@@ -1,5 +1,9 @@
 # AWS Free Plan deployment (plan B)
 
+Region: **`us-east-2` (Ohio).** AWS assigned the author's Free Plan project to Ohio and states that Oregon
+(`us-west-2`) is unavailable without upgrading the plan, which is not being done. The first draft targeted Oregon.
+Availability in Ohio was checked offline (see "Ohio checks" below); nothing has been created.
+
 Status: **proposed, not applied.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
 assessment's plan B is used: an AWS Free Plan account provisioned with Terraform. The Oracle files in
 `infra/` are untouched; this is a separate root module with its own state.
@@ -33,7 +37,7 @@ limitation); Caddy answers 502 during that time.
 
 ## Architecture decision
 
-Only the **public newsroom application** runs on AWS (`t3.small`, `us-west-2`). Hermes, OpenClaw, the
+Only the **public newsroom application** runs on AWS (`t3.small`, `us-east-2` (Ohio)). Hermes, OpenClaw, the
 orchestrator and all agent credentials stay on the engineer's Mac: the agent environment is separate from the
 lightweight public app, so nothing on the VM can reach the agents' tokens, sandboxes or GitHub permissions.
 The trade-off, described in `DELIVERY.md`, is that the agents' environment is not reproduced on the VM.
@@ -44,10 +48,10 @@ Goal: Terraform runs with **short-lived credentials** from a **least-privilege I
 keys**, and the account stays a Free Plan account (nothing here enables AWS Organizations).
 
 1. **Create the policy** (IAM > Policies > Create policy > JSON): paste `iam/newsroom-terraform-ec2-policy.json`
-   (EC2 actions in `us-west-2` only). Name it `NewsroomTerraformEc2UsWest2`.
+   (EC2 actions in `us-east-2` only). Name it `NewsroomTerraformEc2UsEast2`.
 2. **Create the user** (IAM > Users > Create user): name `newsroom-terraform`; tick *Provide user access to the
    AWS Management Console*, choose *I want to create an IAM user*, set a custom password. Attach the policies
-   `NewsroomTerraformEc2UsWest2` and the AWS-managed `SignInLocalDevelopmentAccess`. **Do not create access keys.**
+   `NewsroomTerraformEc2UsEast2` and the AWS-managed `SignInLocalDevelopmentAccess`. **Do not create access keys.**
 3. **Add MFA** to that user (user > Security credentials > Assign MFA device > authenticator app).
 4. **Sign in from the terminal** (the CLI is installed and a key-free profile `newsroom` exists):
    `aws login --profile newsroom`, choose *Sign in with IAM user* in the browser (account ID or alias,
@@ -80,7 +84,7 @@ with `credential_process = aws configure export-credentials --profile newsroom -
   Until then the site runs and shows the clearly marked title fallback instead of model summaries.
 - The VM has no AWS permissions (no instance profile) and requires IMDSv2.
 
-## Cost estimate (us-west-2 and us-east-1 have identical prices)
+## Cost estimate (`us-east-2`, Ohio)
 
 Prices from AWS's public pricing data (EC2 on-demand Linux) and the VPC and EBS pricing pages; 730 hours/month.
 
@@ -132,3 +136,15 @@ and delete the IAM user. An Elastic IP that is left allocated keeps billing $0.0
 - The default VPC must exist in the region (the plan fails clearly if it does not).
 - `user_data` and the AMI are ignored after creation, so later edits do not replace the VM.
 - The SQLite database lives on the root volume and is lost on `destroy` (it is rebuilt by the next refresh).
+
+## Ohio checks (offline, public data, no AWS calls)
+
+- **`t3.small` price in `us-east-2`:** $0.0208/hr on-demand Linux, from AWS's public price list for US East (Ohio);
+  the gp3 price there is $0.08/GB-month. These equal the figures in the table above, which therefore stand.
+  The public IPv4 charge ($0.005/hr) is AWS's published flat rate and was not re-read from the Ohio file.
+- **Ubuntu 24.04 AMI:** Canonical's published image catalogue lists an `ssd-gp3`, `hvm`, amd64 24.04 image for
+  `us-east-2` (most recent listing carrying Ohio: build 20260923), matching the Terraform lookup
+  (owner 099720109477, `ubuntu-noble-24.04-amd64-server-*`, `hvm-ssd-gp3`). The lookup is by name, so it resolves
+  in whichever region the provider uses.
+- **Not checked offline:** that `t3.small` is currently launchable in Ohio for this account (capacity and the
+  Free Plan's own eligibility list can only be confirmed by `terraform plan`/apply with credentials).
