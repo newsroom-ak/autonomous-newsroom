@@ -4,7 +4,7 @@ Region: **`us-east-2` (Ohio).** AWS assigned the author's Free Plan project to O
 (`us-west-2`) is unavailable without upgrading the plan, which is not being done. The first draft targeted Oregon.
 Availability in Ohio was checked offline (see "Ohio checks" below); nothing has been created.
 
-Status: **proposed, validated offline only, not applied. No AWS VM exists.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
+Status: **plan reviewed against the live Ohio account, not applied. No AWS VM exists.** Oracle Always Free had no capacity (see `docs/deployment.md`), so the
 assessment's plan B is used: an AWS Free Plan account provisioned with Terraform. The Oracle files in
 `infra/` are untouched; this is a separate root module with its own state.
 
@@ -54,19 +54,23 @@ account (nothing here enables AWS Organizations, IAM Identity Center or an upgra
   The policy attached at that time was the first, **Oregon** version; it has to be replaced by the Ohio version in
   this directory before use. No access keys were created.
 - In AWS's new Settings > Team experience, **AWS did not offer console-password setup for that IAM user.**
-- **`aws login --region us-west-2 --profile newsroom` failed:** the browser opened by the CLI showed
-  "Something went wrong" instead of the sign-in/session picker.
-- **`aws login --remote ...` failed the same way.** Both attempts were stopped after one try each and not
-  retried.
+- **`aws login --region us-west-2 --profile newsroom` failed** (browser: "Something went wrong"), and so did
+  `aws login --remote`. Both attempts used **Oregon**, which AWS blocks for this project. Neither was retried.
 - **AWS CloudShell reported:** "Your account verification is in progress. This may take up to two days for new
-  accounts." Verification therefore appears to be the blocker, but that is an inference: AWS did not say it was
-  the cause of the `aws login` errors.
-- **No credentials work yet:** `terraform init`/`validate` ran offline; `terraform plan` and `apply` were never
-  run, and no AWS API call was made with this configuration.
+  accounts." **That restriction is unresolved**; it has not been re-checked since.
+- **`aws login --region us-east-2 --profile newsroom` succeeded** on the first attempt in Ohio, with no extra
+  browser step, and returned temporary credentials for an `AccountFullAccessRole` session (not the
+  least-privilege `newsroom-terraform` user). The Oregon failures are therefore best explained by the region
+  mismatch, though AWS did not state the cause. No access keys were created.
+- **Read-only checks in Ohio passed:** caller identity, no existing instances, Elastic IPs or key pairs, a default
+  VPC with subnets in `us-east-2a`/`b`/`c`, `t3.small` offered in all three, and Canonical's Ubuntu 24.04 AMI
+  (`...-20261004`) visible.
+- **`terraform plan` succeeded** (see "Plan result" below). `apply` has **not** been run and no VM exists.
 
 ### Proposed, not verified
 
-None of the steps below has been shown to work on this account. Re-test them once account verification completes.
+The steps below were not what worked: the successful login used a full-access role, not this IAM user. They remain a
+least-privilege option and are unverified.
 
 1. **Create the policy** (IAM > Policies > Create policy > JSON): paste `iam/newsroom-terraform-ec2-policy.json`
    (EC2 actions in `us-east-2` only). Name it `NewsroomTerraformEc2UsEast2`.
@@ -170,3 +174,17 @@ and delete the IAM user. An Elastic IP that is left allocated keeps billing $0.0
   in whichever region the provider uses.
 - **Not checked offline:** that `t3.small` is currently launchable in Ohio for this account (capacity and the
   Free Plan's own eligibility list can only be confirmed by `terraform plan`/apply with credentials).
+
+## Plan result (`terraform plan`, no apply)
+
+First run: temporary `newsroom` login in `us-east-2` with a throwaway public key. **Re-run with the real passphrase-protected
+Ed25519 key (`~/.ssh/confer_aws_ed25519.pub`) gave the identical result.** The AWS CLI profile `newsroom` was also
+corrected to `us-east-2`. Result:
+
+- **`Plan: 9 to add, 0 to change, 0 to destroy`**, with no updates or replacements of existing resources.
+- Resources: instance (`t3.small`, Ubuntu 24.04 `...-20261004`, IMDSv2 required, no instance profile, encrypted
+  20 GB gp3 root volume, standard CPU credits), Elastic IP and association, key pair, security group with SSH
+  (one /32), HTTP, HTTPS and egress rules. No other services.
+- The plan reads the default VPC and one default subnet; it creates no VPC, NAT gateway, load balancer or role.
+- The plan proves the configuration is accepted; it does not prove a launch will succeed (capacity, the pending
+  account verification, and Free Plan limits are only tested by apply).
