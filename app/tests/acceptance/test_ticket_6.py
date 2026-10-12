@@ -147,8 +147,23 @@ def test_articles_limit_and_ordering(monkeypatch):
         finish_iso = (base_dt.replace(hour=10)).replace(tzinfo=None).isoformat()
         _insert_refresh_run(finish_iso)
 
-        # Patch datetime.utcnow used inside the API to a fixed point (now = base_dt).
-        monkeypatch.setattr(api, "datetime", type("dt", (), {"utcnow": lambda: base_dt, "timezone": timezone}))
+        # Patch datetime used inside the API to a deterministic clock.
+        # The original stub replaced the entire ``datetime`` module with a tiny
+        # object that only provided ``utcnow``.  Because ``api`` also relies on the
+        # ``datetime`` constructor (e.g., ``datetime(1970, 1, 1, tzinfo=...)``) for a
+        # fallback sort key, that stub caused ``TypeError: dt() takes no arguments``.
+        #
+        # We instead patch ``api.datetime`` with a subclass of the real
+        # ``datetime.datetime`` that overrides only the ``utcnow`` classmethod.
+        # All other behaviours (construction, ``fromisoformat`` etc.) remain
+        # unchanged, so the code under test works while the current time is
+        # deterministic.
+        class FixedDateTime(datetime):
+            @classmethod
+            def utcnow(cls):  # type: ignore[override]
+                return base_dt
+
+        monkeypatch.setattr(api, "datetime", FixedDateTime)
 
         client = TestClient(main.app)
         resp = client.get("/api/articles")
