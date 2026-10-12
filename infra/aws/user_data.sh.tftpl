@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# First-boot provisioning (cloud-init, runs once as root). Contains no secrets.
+set -euo pipefail
+exec > >(tee -a /var/log/newsroom-bootstrap.log) 2>&1
+echo "bootstrap start: $(date -u +%FT%TZ)"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends git python3 python3-venv ca-certificates curl caddy
+
+# Service account and directories (code is read-only to the service; data is its only writable path)
+id newsroom >/dev/null 2>&1 || useradd --system --home-dir /var/lib/newsroom --shell /usr/sbin/nologin newsroom
+install -d -o root -g root -m 0755 /opt/newsroom
+install -d -o newsroom -g newsroom -m 0750 /var/lib/newsroom
+install -d -o root -g newsroom -m 0750 /etc/newsroom
+
+# Application: public repository at a pinned, reviewed commit
+git clone --quiet ${repo_url} /opt/newsroom/src
+git -C /opt/newsroom/src checkout --quiet ${app_ref}
+python3 -m venv /opt/newsroom/venv
+/opt/newsroom/venv/bin/pip install --no-cache-dir --quiet \
+  fastapi==0.118.0 uvicorn==0.37.0 jinja2==3.1.6 httpx==0.28.1 feedparser==6.0.12
+
+# Empty env file. The OLLAMA_API_KEY is installed over SSH after provisioning (see README).
+# Without it the site still runs; summaries then use the clearly marked title fallback.
+install -m 0640 -o root -g newsroom /dev/null /etc/newsroom/env
+
+cat > /etc/systemd/system/newsroom.service <<'UNIT'
+[Unit]
+Description=Autonomous Newsroom (FastAPI + SQLite; refreshes itself at startup and every 180 minutes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=newsroom
+Group=newsroom
+WorkingDirectory=/opt/newsroom/src/app
+Environment=NEWSROOM_DB=/var/lib/newsroom/newsroom.db
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/newsroom/env
+ExecStart=/opt/newsroom/venv/bin/uvicorn newsroom.main:app --host 127.0.0.1 --port 8000 --proxy-headers
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/newsroom
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# HTTPS front door: Caddy obtains and renews a free certificate for the hostname automatically.
+# FastAPI's auto-generated docs are not served publicly.
+cat > /etc/caddy/Caddyfile <<'CADDY'
+${hostname} {
+	@hidden path /docs /docs/* /redoc /openapi.json
+	respond @hidden 404
+	encode gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+	reverse_proxy 127.0.0.1:8000
+}
+CADDY
+
+systemctl daemon-reload
+systemctl enable --now newsroom.service
+systemctl enable caddy.service
+systemctl restart caddy.service
+echo "bootstrap done: $(date -u +%FT%TZ)"
