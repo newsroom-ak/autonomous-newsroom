@@ -33,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("build")
     b.add_argument("ticket", type=int)
     b.add_argument("--max-turns", type=int, help="approximate turn budget (prompt + wall-clock deadline)")
+    b.add_argument("--exception", help="human-authorized reason for one attempt beyond max_attempts")
+    b.add_argument("--scope", action="append", help="only import these paths from the builder (repeatable)")
+    b.add_argument("--task-file", help="narrow task that replaces the full ticket in TICKET.md")
     t = sub.add_parser("test")
     t.add_argument("ticket", type=int)
     t.add_argument("--focus-file", help="file listing the only tests to add (targeted re-test)")
@@ -63,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "review":
         print(orch.review(args.ticket))
     elif args.cmd == "build":
-        print(orch.build(args.ticket, max_turns=args.max_turns))
+        print(orch.build(args.ticket, max_turns=args.max_turns, exception=args.exception, scope=args.scope,
+                         task=open(args.task_file).read() if args.task_file else None))
     elif args.cmd == "test":
         focus = open(args.focus_file).read() if args.focus_file else None
         print(orch.test(args.ticket, focus=focus, keep_existing=args.keep_existing, model=args.model,

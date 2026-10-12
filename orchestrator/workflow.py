@@ -295,11 +295,21 @@ class Orchestrator:
         return ""
 
     # -- build ------------------------------------------------------------------------------
-    def build(self, ticket: int, max_turns: int | None = None) -> int | None:
+    def build(self, ticket: int, max_turns: int | None = None, exception: str | None = None,
+              scope: list[str] | None = None, task: str | None = None) -> int | None:
+        """Builder implements (or repairs) a ticket.
+
+        exception: a human-authorized reason for exactly one attempt beyond max_attempts.
+        scope: restrict which paths are imported from the builder (default: allowed_paths).
+        task: replace the full ticket in TICKET.md with a narrowly scoped task.
+        """
         issue = self.gh.get_issue("builder", ticket)
         attempt = self._attempts(ticket) + 1
-        if attempt > self.team.max_attempts:
+        if attempt > self.team.max_attempts + (1 if exception else 0):
             return self.escalate(ticket, f"builder exhausted {self.team.max_attempts} attempts")
+        if attempt > self.team.max_attempts:
+            ledger.append(Event(event="exception-authorized", agent="human", runtime="human", ticket=ticket,
+                                attempt=attempt, outcome="extra-attempt", detail=exception))
         branch = self._branch(ticket)
         repo = workspace.harness_clone(self.team, "builder", "builder")
         start = f"origin/{branch}" if workspace.remote_branch_exists(repo, branch) else f"origin/{self.team.base_branch}"
@@ -312,7 +322,10 @@ class Orchestrator:
         if attempt > 1 and pr:
             feedback = self._latest_rejection_text(pr["number"])
         instructions = self._latest_assign_instructions(ticket)
-        workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
+        if task:
+            workspace.safe_write(ws / "TICKET.md", f"# Ticket #{ticket}: {issue['title']} (scoped repair, attempt {attempt})\n\n{task}\n")
+        else:
+            workspace.safe_write(ws / "TICKET.md", render_ticket(issue, instructions, feedback, attempt))
         workspace.safe_write(ws / "BRIEF.md", config.BRIEF_FILE.read_text())
 
         reply = self._openclaw(
@@ -320,7 +333,7 @@ class Orchestrator:
             BUILD_MESSAGE.format(ticket=ticket, attempt=attempt, max_attempts=self.team.max_attempts),
             session=f"ticket-{ticket}-build-{attempt}", ticket=ticket, max_turns=max_turns,
         )
-        changed, outside = workspace.import_changes(ws / "repo", repo, self.team.allowed_paths,
+        changed, outside = workspace.import_changes(ws / "repo", repo, scope or self.team.allowed_paths,
                                                     protected=[ACCEPTANCE_DIR])
         phase = self._phase("coding", attempt)
         # A run stopped by its turn budget may still have produced a usable change; the
@@ -342,6 +355,8 @@ class Orchestrator:
             f"feat(#{ticket}): {issue['title']}\n\n{reply.text[:3000]}\n\n"
             f"Ticket: #{ticket}\nAgent: builder\nRuntime: OpenClaw\nModel: {model}\n"
             f"Attempt: {attempt}\nSession: {reply.session}\n" + (f"Note: {budget_note.strip()}\n" if budget_note else "")
+            + (f"Exception: human-authorized attempt beyond the {self.team.max_attempts}-attempt limit\n" if exception else "")
+            + (f"Scope: {', '.join(scope)}\n" if scope else "")
         )
         workspace.git(repo, "-c", "user.name=builder (OpenClaw agent)", "-c", f"user.email={self.team.bot_email}",
                       "commit", "--quiet", "-m", message)
