@@ -95,17 +95,19 @@ def test_primary_model_called_and_summary_populated(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "A concise summary."}}]}
+                    # Return a JSON‑structured reply as required by Ticket #25.
+                    # Include a deterministic tag so we can assert it later.
+                    return {"choices": [{"message": {"content": "{\"summary\": \"A concise summary.\", \"tag\": \"research\"}"}}]}
 
             return Resp()
 
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
 
-        # Ensure env vars have known values.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "test-primary-model"
-        os.environ["SUMMARY_PRIMARY_KEY"] = "primary-key"
+        # Ensure env vars have known values using monkeypatch so they are restored.
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "test-primary-model")
+        monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "primary-key")
 
         refresh._run_refresh()
 
@@ -118,8 +120,10 @@ def test_primary_model_called_and_summary_populated(monkeypatch):
         cur = conn.cursor()
         cur.execute("SELECT summary, topic_tag, summary_source, summary_model FROM articles")
         summary, tag, source, model = cur.fetchone()
+        # The summary should be extracted from the JSON payload and stored unchanged.
         assert summary == "A concise summary."
-        assert isinstance(tag, str) and tag  # non‑empty
+        # The tag comes from the JSON reply.
+        assert tag == "research"
         assert source == "model"
         assert model == "test-primary-model"
     finally:
@@ -158,17 +162,18 @@ def test_fallback_on_primary_402(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback summary."}}]}
+                        # Return a JSON reply with a tag.
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback summary.\", \"tag\": \"models\"}"}}]}
 
                 return Resp()
 
-        # Patch env to have distinguishable URLs.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
-        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
-        os.environ["SUMMARY_PRIMARY_KEY"] = "primary-key"
-        os.environ["SUMMARY_FALLBACK_KEY"] = "fallback-key"
+        # Patch env to have distinguishable URLs using monkeypatch.
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_FALLBACK_URL", "https://fallback.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "primary-model")
+        monkeypatch.setenv("SUMMARY_FALLBACK_MODEL", "fallback-model")
+        monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "primary-key")
+        monkeypatch.setenv("SUMMARY_FALLBACK_KEY", "fallback-key")
 
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
@@ -236,7 +241,8 @@ def test_idempotent_summarisation(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "First summary"}}]}
+                    # Return a JSON‑structured reply containing a simple summary.
+                    return {"choices": [{"message": {"content": "{\"summary\": \"First summary\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 
@@ -291,7 +297,7 @@ def test_primary_429_triggers_fallback(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback from 429."}}]}
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback from 429.\", \"tag\": \"general\"}"}}]}
 
                 return Resp()
 
@@ -335,7 +341,7 @@ def test_primary_timeout_triggers_fallback(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback from timeout."}}]}
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback from timeout.\", \"tag\": \"general\"}"}}]}
 
                 return Resp()
 
@@ -390,7 +396,7 @@ def test_max_summaries_limit(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": f"Summary {json['model']}"}}]}
+                    return {"choices": [{"message": {"content": "{\"summary\": \"Summary " + json["model"] + "\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 
@@ -429,7 +435,7 @@ def test_resummarize_on_title_change(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "Summary A"}}]}
+                    return {"choices": [{"message": {"content": "{\"summary\": \"Summary A\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 

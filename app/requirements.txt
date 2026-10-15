@@ -4,3 +4,4 @@ jinja2
 httpx
 feedparser
 pytest
+pydantic
