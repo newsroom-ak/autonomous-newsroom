@@ -63,7 +63,8 @@ def test_primary_success(monkeypatch, temporary_db):
 
     # Mock the primary model to return a concise summary.
     def fake_call(url, key, model, prompt):  # pragma: no cover
-        return "A short summary from primary"
+        # Return a valid JSON object with a summary and explicit tag.
+        return "{\"summary\": \"A short summary from primary\", \"tag\": \"research\"}"
 
     monkeypatch.setattr(summarize, "_call_model", fake_call)
 
@@ -78,8 +79,8 @@ def test_primary_success(monkeypatch, temporary_db):
         assert source == "model"
         # Model name should be the primary model env var.
         assert model == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b")
-        # Tag extraction is simple – the first word lower‑cased.
-        assert tag == "a"
+        # Tag should come from the JSON payload.
+        assert tag == "research"
 
 
 def test_fallback_used_on_primary_error(monkeypatch, temporary_db):
@@ -95,7 +96,8 @@ def test_fallback_used_on_primary_error(monkeypatch, temporary_db):
             # Simulate primary HTTP 429 error by raising httpx.HTTPStatusError.
             import httpx
             raise httpx.HTTPStatusError("429 Too Many Requests", request=None, response=type("R", (), {"status_code": 429})())
-        return "Fallback summary outcome"
+        # Return a valid JSON reply for fallback.
+        return "{\"summary\": \"Fallback summary outcome\", \"tag\": \"models\"}"
 
     monkeypatch.setattr(summarize, "_call_model", fake_call)
 
@@ -116,6 +118,12 @@ def test_fallback_used_on_primary_error(monkeypatch, temporary_db):
         assert model == os.getenv(
             "SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b"
         )
+        # Tag should be the one from the JSON payload.
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT topic_tag FROM articles")
+            tag = cur.fetchone()[0]
+        assert tag == "models"
 
     # Ensure both primary and fallback were attempted.
     assert any(call[1] == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b") for call in calls)

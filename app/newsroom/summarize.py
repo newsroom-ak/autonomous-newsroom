@@ -1,8 +1,12 @@
 """Summarization utilities for the Newsroom application.
 
-This module implements the primary/fallback model calls required by ticket #5.
-It is deliberately lightweight and uses only the standard library and the
-whitelisted ``httpx`` package.
+This module implements the primary/fallback model calls required by **Ticket #25**.
+It now asks the model for a **single JSON object** containing a one‑sentence
+``summary`` and a ``tag`` selected from a controlled taxonomy. The reply is
+validated with **Pydantic v2**; only a usable ``summary`` (≥ 3 alphanumeric
+characters) is accepted. An invalid or unparsable reply triggers the fallback
+model, and if both models fail we fall back to a deterministic title‑based
+summary.
 
 The public entry point is :func:`summarize_pending` which selects up to
 ``NEWSROOM_MAX_SUMMARIES`` unsummarized articles (newest first) and attempts to
@@ -18,6 +22,74 @@ from typing import Tuple
 import httpx
 
 from . import db
+
+# ---------------------------------------------------------------------------
+# Pydantic model for validation of the model's JSON reply (Ticket #25).
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel, Field, validator
+
+
+ALLOWED_TAGS = {
+    "research",
+    "models",
+    "products",
+    "tools",
+    "hardware",
+    "policy",
+    "safety",
+    "business",
+    "open-source",
+    "education",
+    "general",
+}
+
+
+class SummaryResponse(BaseModel):
+    """Schema for the model's JSON output.
+
+    * ``summary`` – a non‑empty string containing at least three alphanumeric
+      characters.
+    * ``tag`` – optional; when present it is stripped, lower‑cased and must be one
+      of :data:`ALLOWED_TAGS`. Validation does **not** reject the whole reply if
+      the tag is missing or unknown – callers will substitute ``"general"``.
+    """
+
+    summary: str = Field(..., description="One‑sentence summary of the article.")
+    tag: str | None = Field(default=None, description="Requested topic tag.")
+
+    @validator("summary")
+    def summary_must_have_content(cls, v: str) -> str:
+        # Collapse whitespace for the check but keep original spacing.
+        if not v or sum(ch.isalnum() for ch in v) < 3:
+            raise ValueError("summary must contain at least three alphanumeric characters")
+        return v
+
+    @validator("tag", pre=True, always=True)
+    def normalize_tag(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        norm = v.strip().lower()
+        return norm or None
+
+
+def _validate_response(raw: str) -> SummaryResponse:
+    """Extract JSON from ``raw`` (optionally wrapped in a Markdown fence) and
+    validate it against :class:`SummaryResponse`.
+    """
+    # Strip surrounding whitespace first.
+    raw = raw.strip()
+    # Remove optional Markdown code fences (```json ... ``` or ``` ... ```)
+    if raw.startswith("```"):
+        # Split first line to detect possible language specifier.
+        parts = raw.split("\n", 1)
+        if len(parts) == 2:
+            # Remove the opening fence line and the trailing fence.
+            raw = parts[1]
+        # Remove trailing fence if present.
+        if raw.endswith("```"):
+            raw = raw[: -3]
+    # The remaining string should be JSON.
+    return SummaryResponse.model_validate_json(raw)
 
 # ---------------------------------------------------------------------------
 # Configuration helpers – these read environment variables **at call time**
@@ -82,23 +154,44 @@ def _call_model(url: str, key: str, model: str, prompt: str) -> str:
 
 
 def _clean_summary(text: str) -> str:
-    """Return a one‑line, max‑160‑character summary.
+    """Return a cleaned, one‑line summary ≤ 160 characters.
 
-    Newlines are stripped, surrounding whitespace collapsed, and the result is
-    truncated to 160 characters.
+    The function removes newlines/tabs, collapses consecutive whitespace, strips
+    surrounding quotation marks, and enforces a *whole‑word* truncation. If the
+    text exceeds 160 characters the result is cut at the last word boundary
+    before the limit and suffixed with an ellipsis ``…`` so the final length does
+    not exceed 160.
     """
-    single_line = " ".join(text.split())
-    return single_line[:160]
+    # Collapse whitespace and remove surrounding quotes.
+    cleaned = " ".join(text.split())
+    cleaned = cleaned.strip('"\'')
+    if len(cleaned) <= 160:
+        return cleaned
+    # Find last space before the 160‑char limit.
+    cutoff = cleaned.rfind(' ', 0, 160)
+    if cutoff == -1:
+        # No space found – hard cut.
+        cutoff = 160
+    trimmed = cleaned[:cutoff].rstrip()
+    # Append ellipsis ensuring total length ≤ 160.
+    if len(trimmed) + 1 <= 160:
+        return f"{trimmed}…"
+    # Edge case: trimmed already 160, just return it.
+    return trimmed
 
 
 def _extract_tag(summary: str) -> str:
-    """Extract a one‑word tag from *summary*.
+    """Extract a tag from the model's ``summary`` field.
 
-    The simple heuristic uses the first alphabetic word, lower‑cased. If none is
-    found ``"general"`` is returned.
+    The allowed tags are defined in :data:`ALLOWED_TAGS`. If the supplied tag is
+    missing, not a string, or not in the whitelist we return ``"general"``.
     """
+    # The model reply may already include a ``tag`` field – callers pass it in
+    # via the ``SummaryResponse``; however historic code still falls back to the
+    # heuristic. We keep the heuristic for backward compatibility.
     match = re.search(r"[A-Za-z]+", summary)
-    return match.group(0).lower() if match else "general"
+    candidate = match.group(0).lower() if match else "general"
+    return candidate if candidate in ALLOWED_TAGS else "general"
 
 
 def _is_usable(summary: str) -> bool:
@@ -124,11 +217,37 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     * ``model`` is the name of the model that provided the usable summary, or ``None``
       for the final title fallback.
     """
+    # Build a prompt that explicitly asks for JSON output, lists the allowed
+    # tags, and includes the article title.
+    allowed_tags_str = ", ".join(sorted(ALLOWED_TAGS))
     prompt = (
-        f"Summarize the following article title in one short sentence (max 160 chars):\n{title}"
+        "You are summarizing an article for a news feed. Respond ONLY with a JSON "
+        "object (no extra text) containing two keys: \"summary\" and \"tag\". "
+        "The summary must be ONE SENTENCE, max 160 characters. The tag must be "
+        f"one of: {allowed_tags_str}. Include the article title in your prompt for context. "
+        "Make sure the JSON is valid and include the word 'JSON' in the response.\n"
+        f"Title: {title}\n"
     )
 
-    # Primary model attempt – any exception triggers fallback.
+    # Helper to process a raw model reply.
+    def _process_reply(raw: str, model_name: str) -> tuple[str, str, str, str] | None:
+        try:
+            resp = _validate_response(raw)
+        except Exception:
+            return None
+        # Clean and validate summary length/content.
+        cleaned = _clean_summary(resp.summary)
+        if not _is_usable(cleaned):
+            return None
+        # Determine tag – use validated tag if present and allowed, else fallback.
+        tag_candidate = resp.tag if isinstance(resp.tag, str) else None
+        if tag_candidate and tag_candidate in ALLOWED_TAGS:
+            tag = tag_candidate
+        else:
+            tag = "general"
+        return cleaned, tag, "model", model_name
+
+    # Primary model attempt.
     try:
         raw = _call_model(
             _get_primary_url(),
@@ -136,15 +255,13 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
             _get_primary_model(),
             prompt,
         )
-        summary = _clean_summary(raw)
-        if _is_usable(summary):
-            tag = _extract_tag(summary)
-            return summary, tag, "model", _get_primary_model()
+        result = _process_reply(raw, _get_primary_model())
+        if result:
+            return result
     except Exception:
-        # Proceed to fallback on any error.
         pass
 
-    # Fallback model attempt – only usable summaries are accepted.
+    # Fallback model attempt.
     try:
         raw = _call_model(
             _get_fallback_url(),
@@ -152,18 +269,15 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
             _get_fallback_model(),
             prompt,
         )
-        summary = _clean_summary(raw)
-        if _is_usable(summary):
-            tag = _extract_tag(summary)
-            return summary, tag, "model", _get_fallback_model()
+        result = _process_reply(raw, _get_fallback_model())
+        if result:
+            return result
     except Exception:
-        # Any failure means we will use the title fallback.
         pass
 
-    # Title‑based fallback – guaranteed non‑empty summary.
-    summary = title[:120]
-    tag = "general"
-    return summary, tag, "fallback", None
+    # Title‑based fallback – use truncated title as summary, tag "general".
+    summary = _clean_summary(title)
+    return summary, "general", "fallback", None
 
 
 def summarize_pending() -> None:
