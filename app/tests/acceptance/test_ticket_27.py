@@ -1,18 +1,115 @@
 '''Acceptance tests for Ticket #27: Remove contradictory instructions from the summarizer prompt.
 
 Each test corresponds to one acceptance criterion listed in TICKET.md.
-'''\n\nfrom __future__ import annotations\n\nimport os\nimport sys\nimport pathlib\nimport pytest\n\n# Ensure the package root (repo/app) is on the import path so we can import the
+'''
+
+from __future__ import annotations
+
+import os
+import sys
+import pathlib
+import pytest
+
+# Ensure the package root (repo/app) is on the import path so we can import the
 # newsroom package as the production code does.
 # Add the workspace's ``repo/app`` directory to ``sys.path`` so that the ``newsroom`` package can be imported from this test file.
 # ``test_acceptance.py`` lives in ``/workspace/acceptance``; its parent directory (``parents[1]``) is the workspace root (``/workspace``). The application code resides in ``repo/app`` relative to that root.
-sys.path.append(str(pathlib.Path(__file__).parents[1] / "repo" / "app"))\n\nfrom newsroom import summarize\n\n# ---------------------------------------------------------------------------\n# Helper fixture to capture the prompt passed to each model call.\n# ---------------------------------------------------------------------------\n@pytest.fixture\ndef capture_prompts(monkeypatch):\n    """Monkey‑patch :func:`summarize._call_model` to record prompts.
-\n    The fake implementation records the prompt string and optionally raises an
+sys.path.append(str(pathlib.Path(__file__).parents[1] / "repo" / "app"))
+
+from newsroom import summarize
+
+# ---------------------------------------------------------------------------
+# Helper fixture to capture the prompt passed to each model call.
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def capture_prompts(monkeypatch):
+    """Monkey‑patch :func:`summarize._call_model` to record prompts.
+
+    The fake implementation records the prompt string and optionally raises an
     exception for the primary model to force a fallback call. The return value
     is a minimal valid JSON payload so the fallback processing can continue.
     """
-    prompts: list[str] = []\n\n    def fake_call(url: str, key: str, model: str, prompt: str):  # pragma: no cover\n        prompts.append(prompt)\n        # Force the primary model to fail so both primary and fallback are
-        # exercised. The environment variable defaults match the production code.
-        if model == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b"):\n            raise Exception("force fallback")\n        # Return a minimal valid JSON that satisfies the schema.
-        return "{\"summary\": \"ok\", \"tag\": \"research\"}"\n\n    monkeypatch.setattr(summarize, "_call_model", fake_call)\n    return prompts\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 1 – Contradiction removed.\n# ---------------------------------------------------------------------------\ndef test_contradiction_removed(capture_prompts):\n    title = "Test article title for contradiction"\n    summarize._summarize_with_fallback(title)\n    # Two prompts should have been captured (primary then fallback).\n    assert len(capture_prompts) == 2\n    primary_prompt = capture_prompts[0]\n    # The two offending sentences must not appear (case‑insensitive).\n    assert "include the article title in your prompt for context".lower() not in primary_prompt.lower()\n    assert "make sure the json is valid and include the word".lower() not in primary_prompt.lower()\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 2 – JSON‑only instruction preserved.\n# ---------------------------------------------------------------------------\ndef test_json_only_instruction_preserved(capture_prompts):\n    title = "Another test title"\n    summarize._summarize_with_fallback(title)\n    primary_prompt = capture_prompts[0]\n    # Must still contain the explicit JSON‑only directive.\n    assert "Respond ONLY with a JSON object" in primary_prompt\n    # The new clarification sentence also includes the word JSON.\n    assert "Return a single valid JSON object" in primary_prompt\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 3 – Schema and tags preserved.\n# ---------------------------------------------------------------------------\ndef test_schema_and_tags_preserved(capture_prompts):\n    title = "Tag preservation test"\n    summarize._summarize_with_fallback(title)\n    primary_prompt = capture_prompts[0]\n    # All allowed tags must be listed in the prompt.\n    for tag in sorted(summarize.ALLOWED_TAGS):\n        assert tag in primary_prompt\n    # The prompt still mentions the required keys.\n    assert "summary" in primary_prompt and "tag" in primary_prompt\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 4 – Title context preserved (appears exactly once).\n# ---------------------------------------------------------------------------\ndef test_title_context_preserved(capture_prompts):\n    title = "Unique Title 12345"\n    summarize._summarize_with_fallback(title)\n    primary_prompt = capture_prompts[0]\n    title_line = f"Title: {title}\n"
-    assert title_line in primary_prompt\n    # Ensure the exact line occurs only once.\n    assert primary_prompt.count(title_line) == 1\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 5 – No prompt growth (<=455 chars without title line).\n# ---------------------------------------------------------------------------\ndef test_prompt_length_without_title(capture_prompts):\n    title = "Length check title"\n    summarize._summarize_with_fallback(title)\n    primary_prompt = capture_prompts[0]\n    title_line = f"Title: {title}\n"
-    # Remove the title line before measuring length.\n    prompt_without_title = primary_prompt.replace(title_line, "")\n    assert len(prompt_without_title) <= 455\n\n# ---------------------------------------------------------------------------\n# Acceptance criterion 6 – Same prompt for primary and fallback models.\n# ---------------------------------------------------------------------------\ndef test_prompt_identical_for_both_models(capture_prompts):\n    title = "Identical prompt test"\n    summarize._summarize_with_fallback(title)\n    assert len(capture_prompts) == 2\n    primary_prompt, fallback_prompt = capture_prompts\n    assert primary_prompt == fallback_prompt\n
+    prompts: list[str] = []
+
+    def fake_call(url: str, key: str, model: str, prompt: str):  # pragma: no cover
+        prompts.append(prompt)
+        # Force the primary model to fail so both primary and fallback are exercised.
+        if model == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b"):
+            raise Exception("force fallback")
+        # Return a minimal valid JSON that satisfies the schema.
+        return "{\"summary\": \"ok\", \"tag\": \"research\"}"
+
+    monkeypatch.setattr(summarize, "_call_model", fake_call)
+    return prompts
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 1 – Contradiction removed.
+# ---------------------------------------------------------------------------
+def test_contradiction_removed(capture_prompts):
+    title = "Test article title for contradiction"
+    summarize._summarize_with_fallback(title)
+    # Two prompts should have been captured (primary then fallback).
+    assert len(capture_prompts) == 2
+    primary_prompt = capture_prompts[0]
+    # The two offending sentences must not appear (case‑insensitive).
+    assert "include the article title in your prompt for context".lower() not in primary_prompt.lower()
+    assert "make sure the json is valid and include the word".lower() not in primary_prompt.lower()
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 2 – JSON‑only instruction preserved.
+# ---------------------------------------------------------------------------
+def test_json_only_instruction_preserved(capture_prompts):
+    title = "Another test title"
+    summarize._summarize_with_fallback(title)
+    primary_prompt = capture_prompts[0]
+    # Must still contain the explicit JSON‑only directive.
+    assert "Respond ONLY with a JSON object" in primary_prompt
+    # The new clarification sentence also includes the word JSON.
+    assert "Return a single valid JSON object" in primary_prompt
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 3 – Schema and tags preserved.
+# ---------------------------------------------------------------------------
+def test_schema_and_tags_preserved(capture_prompts):
+    title = "Tag preservation test"
+    summarize._summarize_with_fallback(title)
+    primary_prompt = capture_prompts[0]
+    # All allowed tags must be listed in the prompt.
+    for tag in sorted(summarize.ALLOWED_TAGS):
+        assert tag in primary_prompt
+    # The prompt still mentions the required keys.
+    assert "summary" in primary_prompt and "tag" in primary_prompt
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 4 – Title context preserved (appears exactly once).
+# ---------------------------------------------------------------------------
+def test_title_context_preserved(capture_prompts):
+    title = "Unique Title 12345"
+    summarize._summarize_with_fallback(title)
+    primary_prompt = capture_prompts[0]
+    title_line = f"Title: {title}\n"
+    assert title_line in primary_prompt
+    # Ensure the exact line occurs only once.
+    assert primary_prompt.count(title_line) == 1
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 5 – No prompt growth (<=455 chars without title line).
+# ---------------------------------------------------------------------------
+def test_prompt_length_without_title(capture_prompts):
+    title = "Length check title"
+    summarize._summarize_with_fallback(title)
+    primary_prompt = capture_prompts[0]
+    title_line = f"Title: {title}\n"
+    # Remove the title line before measuring length.
+    prompt_without_title = primary_prompt.replace(title_line, "")
+    assert len(prompt_without_title) <= 455
+
+# ---------------------------------------------------------------------------
+# Acceptance criterion 6 – Same prompt for primary and fallback models.
+# ---------------------------------------------------------------------------
+def test_prompt_identical_for_both_models(capture_prompts):
+    title = "Identical prompt test"
+    summarize._summarize_with_fallback(title)
+    assert len(capture_prompts) == 2
+    primary_prompt, fallback_prompt = capture_prompts
+    assert primary_prompt == fallback_prompt
