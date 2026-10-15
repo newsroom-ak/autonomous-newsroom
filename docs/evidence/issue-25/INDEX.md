@@ -155,8 +155,10 @@ disclosed in comments on the PR. In the harness record, "attempt" counts Builder
 
 ## 9. Known limitations
 
-- The summarizer prompt that the Builder wrote contains a contradictory sentence (it tells the model to include the article title and the word "JSON" in its response). It did not block the merge, but it should be fixed before this code is deployed; a follow-up ticket is planned.
-- The deployed sites still run the earlier code; this ticket's merge did not redeploy anything.
+- **Update (2026-10-15, after this index was first published): the prompt contradiction was corrected.** The summarizer prompt written under this ticket told the model to include the article title and the word "JSON" in its response. It did not block the merge. It was removed through a separate, agent-delivered ticket: [Issue #27](https://github.com/newsroom-ak/autonomous-newsroom/issues/27) / [PR #28](https://github.com/newsroom-ak/autonomous-newsroom/pull/28), merged as [`b62706a`](https://github.com/newsroom-ak/autonomous-newsroom/commit/b62706aa7dcd25fc8885ce350607c6d2eb02ddaf). See the [Issue #27 evidence index](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/INDEX.md) (on branch `evidence/issue-27`).
+- **Update:** the earlier statement that the deployed sites still ran the earlier code is no longer true. The AWS site was manually updated to `b62706a` after PR #28 merged; that deployment is human-assisted production maintenance and is summarized in the [Issue #27 evidence](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/PRODUCTION-MAINTENANCE.md). The Cloudflare Quick Tunnel fallback has been retired.
+- Strict JSON validation improves the consistency of the output format. It does not guarantee that a summary contains only claims supported by the headline (see the production-maintenance note linked above).
+- *This section was corrected in a later commit; the original text is preserved in the branch history (commit `2a776d8`).*
 
 ## 10. Verify independently
 
