@@ -24,7 +24,7 @@ service, IAM role or secrets service to create or pay for.
 ## How the VM runs the app
 
 Cloud-init (`user_data.sh.tftpl`, no secrets) installs Caddy and Python, clones the public repository at a
-**pinned commit** (`app_git_ref`, the exact reviewed code that is live today), installs the pinned
+**pinned commit** (`app_git_ref`; this was the reviewed code that was live on 2026-10-12, commit `f3349a0`), installs the pinned
 dependencies in a venv, and starts two systemd services:
 
 - `newsroom.service`: uvicorn on `127.0.0.1:8000` as a non-root `newsroom` user, `Restart=always`, enabled at
@@ -205,9 +205,14 @@ corrected to `us-east-2`. Result:
 - **Summary coverage:** latest 10 articles before the reboot: 6 model, 4 title fallbacks; after the reboot's startup
   refresh: 8 model, 2 fallback. Whole database after the reboot: 23 model (22 `gpt-oss:20b`, 1 `nemotron-3-nano:30b`),
   13 fallback, 64 not yet summarised. Links and dates of the latest 10 were valid and ordered, with no duplicates.
-- **Scheduled refresh: pending.** Runs 1-3 were startup refreshes; the first timer-driven run is due about 10:35 UTC
-  (180 minutes after run 3 finished). Check with `sudo python3` against `refresh_runs` in
-  `/var/lib/newsroom/newsroom.db` (read-only) and `journalctl -u newsroom`. Not triggered artificially.
+- **Scheduled refresh: verified (2026-10-15).** Runs 1-3 were startup refreshes. A read-only check of `refresh_runs` on 2026-10-15
+  showed 32 runs; each recent timer-driven run (27 to 31) started exactly 180 minutes after the previous one finished. Check with
+  `sudo python3` against `refresh_runs` in `/var/lib/newsroom/newsroom.db` (read-only) and `journalctl -u newsroom`. Never triggered artificially.
+- **Code update (2026-10-15): the VM now runs `b62706a`, not the pinned `f3349a0`.** Terraform ignores application code
+  (`ignore_changes` on `ami` and `user_data`), so the update was a manual, human-assisted procedure: verified SQLite backup, fast-forward
+  of the clone, import check, one `systemctl restart`, then checks that existing rows were unchanged. `app_git_ref` in `variables.tf` was
+  deliberately left at `f3349a0`; a **new** VM created from this Terraform would start from that older commit and would need the same
+  manual update. Replacing the instance would also destroy its database (the root volume is deleted on termination).
 - Running as a temporary session of a full-access role; there is still no least-privilege Terraform identity and no
   access key.
 

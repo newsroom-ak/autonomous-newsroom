@@ -12,10 +12,14 @@ local Terraform state is intentionally untouched and git-ignored.
 Tunnel**, the emergency fallback the assessment brief describes.
 
 > **Update (2026-10-12): the public app is now also deployed on AWS.** After this document was written, an AWS Free
-> Plan VM (EC2 `t3.small`, `us-east-2`) was provisioned with Terraform and serves https://3-13-197-253.sslip.io. It is the primary
-> deployment; the Cloudflare Quick Tunnel described here remains the fallback. See `infra/aws/README.md` for the
-> procedure and verification results and `DELIVERY.md` (section 6) for the full account. The agents still run on the
-> engineer's Mac.
+> Plan VM (EC2 `t3.small`, `us-east-2`) was provisioned with Terraform and serves https://3-13-197-253.sslip.io. See
+> `infra/aws/README.md` for the procedure and verification results and `DELIVERY.md` (section 6) for the full account. The agents
+> still run on the engineer's Mac.
+>
+> **Update (2026-10-15): the Cloudflare Quick Tunnel has been retired.** It no longer runs and its URL no longer answers; the AWS
+> site is the only live deployment and now runs commit `b62706a` (updated by hand, with a verified database backup first; Terraform
+> does not redeploy code). The rest of this page describes the tunnel fallback as it was while it ran, and is kept for the record.
+> It never ran the code of tickets #25 and #27.
 
 ### Limitations (disclosed)
 

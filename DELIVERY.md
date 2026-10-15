@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Live newsroom** | https://beach-educated-counts-ray.trycloudflare.com *(Cloudflare Quick Tunnel to the author's Mac; see [Hosting](#6-infrastructure-and-hosting) for its limits)* |
+| **Live newsroom** | https://3-13-197-253.sslip.io *(AWS EC2 `t3.small`, Ohio, Terraform-provisioned, HTTPS; running `b62706a`, see [Hosting](#6-infrastructure-and-hosting)). The earlier Cloudflare Quick Tunnel has been retired and its URL no longer works.* |
 | **Repository** | https://github.com/newsroom-ak/autonomous-newsroom (public) |
 | **Product** | A news page on "latest AI/ML news": real Google News RSS, model-written one-line summaries and tags, SQLite, "updated X ago", refreshed on a schedule |
 | **Who wrote what** | `app/` was written by OpenClaw agents (builder and tester) through GitHub tickets and PRs. `orchestrator/`, `agents/` prompts and configuration snapshots, `scripts/`, `deploy/`, `infra/` and the docs were written by the human with Claude Code assistance (see [section 9](#9-human-involvement-and-disclosures)) |
-| **State at hand-over** | Tickets #4–#8 and the live-test bug #16 are merged. The app runs publicly in two places: on an **AWS EC2 `t3.small` in `us-east-2` (Ohio), provisioned with Terraform** (https://3-13-197-253.sslip.io, verified 2026-10-12), and through the Cloudflare Quick Tunnel from the author's Mac (kept as the fallback). Oracle provisioning failed on confirmed host capacity. The agents (Hermes, OpenClaw, orchestrator) stay on the Mac by design (see [section 6](#6-infrastructure-and-hosting)). |
+| **State at hand-over** | Tickets #4–#8, the live-test bug #16, and two later tickets, **#25** (structured, validated summaries and tags) and **#27** (a prompt correction), are merged. The app runs publicly on an **AWS EC2 `t3.small` in `us-east-2` (Ohio), provisioned with Terraform**, at https://3-13-197-253.sslip.io, currently on commit `b62706a`. Oracle provisioning failed on confirmed host capacity. The agents (Hermes, OpenClaw, orchestrator) stay on the Mac by design (see [section 6](#6-infrastructure-and-hosting)). Three kinds of work are kept apart throughout: **agent-authored implementation**, **human-assisted tests**, and **human-assisted production maintenance** ([section 9](#9-human-involvement-and-disclosures)). |
 
 Every number below comes from `docs/evidence/ledger.jsonl` (the harness's own log), GitHub, or a command run
 for this report. Where something is an estimate or an interpretation, it says so.
@@ -18,12 +18,12 @@ for this report. Where something is an estimate or an interpretation, it says so
 | Requirement from the brief | Status | Evidence |
 |---|---|---|
 | OpenClaw **and** Hermes, both used, with orchestrator, builder, reviewer, tester | ✅ | [Roster](#2-agent-roster) |
-| Tickets flow through something inspectable; review and test can send work back | ✅ | GitHub issues #4–#8, #16; PRs #9, #11, #13, #14, #15, #17; [rejections](#5-what-broke-and-how-it-was-handled) |
-| Agents write the code; git history shows agent-authored commits | ✅ for `app/` | 30 agent commits on `main` (17 builder, 13 tester); [section 3](#3-what-each-agent-actually-did) |
+| Tickets flow through something inspectable; review and test can send work back | ✅ | GitHub issues #4–#8, #16, #25, #27; PRs #9, #11, #13, #14, #15, #17, #26, #28; [rejections](#5-what-broke-and-how-it-was-handled) |
+| Agents write the code; git history shows agent-authored commits | ✅ for `app/` | 39 agent commits on `main` (21 builder, 18 tester); [section 3](#3-what-each-agent-actually-did). Three test-only commits inside agent PRs are human-assisted and labelled (section 9). |
 | Free stack: free VM provisioned with Terraform, free models | ✅ AWS / ❌ Oracle | A Terraform-provisioned VM exists on **AWS** (Free Plan, `t3.small`, Ohio; [section 6](#6-infrastructure-and-hosting)). Oracle Always Free **never created a VM** (confirmed host-capacity failure). The brief's `m7i-flex.large` was replaced by `t3.small` to stretch credit. Models: Ollama Cloud free plan only. |
-| Public URL that loads and does the core thing | ✅ | **Primary: https://3-13-197-253.sslip.io** (AWS EC2 `t3.small`, Ohio, Terraform-provisioned, HTTPS; verified 2026-10-12, including a reboot test). **Fallback:** Cloudflare Quick Tunnel from the author's Mac (the URL changes if the tunnel restarts and the Mac must stay on) |
+| Public URL that loads and does the core thing | ✅ | **https://3-13-197-253.sslip.io** (AWS EC2 `t3.small`, Ohio, Terraform-provisioned, HTTPS; verified 2026-10-12 including a reboot test; updated to `b62706a` on 2026-10-15). The Cloudflare Quick Tunnel fallback has been retired. |
 | Page: ~10 articles, one-line summary, topic tag, source link, "updated X ago" | ✅ | Verified live: 10 articles, none empty, model-written summaries |
-| Scheduled refresh, stored in a database | ✅ Mac / ⏳ AWS pending | In-app scheduler (startup + every 180 min), SQLite. **Verified on the Mac deployment:** the second refresh fired on its own exactly 180 minutes after the first ([section 8](#8-quality-gates-in-practice)). **On the AWS VM it has not yet been observed:** its three refreshes so far were startup refreshes, and the first timer-driven one was due about 10:35 UTC on 2026-10-12 |
+| Scheduled refresh, stored in a database | ✅ | In-app scheduler (startup + every 180 min), SQLite. **Verified on AWS** (read-only check of the VM's `refresh_runs`, 2026-10-15): 32 runs, and each recent timer-driven run (e.g. runs 27–31) started exactly 180 minutes after the previous one finished. Also verified earlier on the Mac deployment ([section 8](#8-quality-gates-in-practice)). |
 | Summarize once, fall back to a second free model on 402/429 | ✅ | Verified live (HTTP 402 from `kimi-k3` triggers the fallback); title fallback is marked as such |
 | `agents/` with each agent's config, prompts and skills (secrets removed) | ✅ | Prompts, `agents/team.json`, and sanitized Hermes/OpenClaw snapshots with provenance in `agents/SNAPSHOT.md` |
 | Token and model report | ✅ | [Section 4](#4-token-and-model-report), including a cross-check against Hermes's own usage records |
@@ -92,8 +92,7 @@ pusher (only the human account), no Actions.
 
 ### Tickets
 
-Dispatch created #4–#8 from the brief in one planning call (5,288 tokens). Ticket #16 was reported by the human
-from live testing and filed through the harness. Counts below are from the ledger.
+Dispatch created #4–#8 from the brief in one planning call (5,288 tokens). Tickets #16, #25 and #27 were written by the human and filed through the harness (#16 from live testing; #25 as a demo feature; #27 as a follow-up that fixed a defect found in #25's prompt). Counts below are from the ledger.
 
 | Ticket | PR | Builder runs | Tester model runs | Deterministic re-runs (no model) | Reviews | Outcome |
 |---|---|---:|---:|---:|---|---|
@@ -103,10 +102,11 @@ from live testing and filed through the harness. Counts below are from the ledge
 | #7 Public page | #14 | 4 (1 human-authorized extra) | 3 | 5 | 1 approval | merged |
 | #8 Scheduler | #15 | 3 | 2 | 3 | 1 invalid reply, **1 rejection**, 1 approval | merged |
 | #16 Live-test bug | #17 | 2 | 1 (+2 aborted) | 3 | 1 approval | merged; its final test fix was **human-assisted** |
+| #25 Validated structured summaries and tags | #26 | 3 (attempts 2–3 with human-written task text) | 5 (T1 on `gpt-oss:20b`) | 2 | 2: **1 rejection**, 1 approval | merged `45504f4`; two **human-assisted test-only commits** ([evidence](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-25/docs/evidence/issue-25/INDEX.md)) |
+| #27 Remove contradictory prompt instructions | #28 | 1 | 2 (one focused rerun) | 1 | 2 approvals | merged `b62706a`; one **human-assisted test-only commit** ([evidence](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/INDEX.md)) |
 
-Commits on `main`: 17 by `builder (OpenClaw agent)`, 13 by `tester (OpenClaw agent)` (tester commits are
-authored by the tester but committed by `newsroom-orchestrator (harness)`, see below), 23 non-merge commits by
-the human. Builder commits carry trailers (`Ticket`, `Agent`, `Runtime`, `Model`, `Attempt`, `Session`) that
+Commits on `main` (non-merge, counted with `git log`): 21 by `builder (OpenClaw agent)`, 18 by `tester (OpenClaw agent)` (tester commits are
+authored by the tester but committed by `newsroom-orchestrator (harness)`, see below), 47 by the human. The human count includes the harness, docs and infrastructure code and three test-only commits that were made on agent PRs (`4bb2657`, `94d4c06`, `b1bbe53`); those are disclosed on the PRs and in section 9. Builder commits carry trailers (`Ticket`, `Agent`, `Runtime`, `Model`, `Attempt`, `Session`) that
 match the OpenClaw session.
 
 **How a tester commit is made.** The tester's token is read-only for repository contents (so a gatekeeper cannot
@@ -118,49 +118,50 @@ Builder imports cannot touch that directory.
 
 ## 4. Token and model report
 
-**Source:** `docs/evidence/ledger.jsonl`: 62 runs with usage (99 events in total). Numbers are what each
+**Source:** `docs/evidence/ledger.jsonl` (the figures below include tickets #25 and #27 from the harness's ledger): 80 runs with usage (128 events in total). Numbers are what each
 runtime *reported*: OpenClaw `agentMeta.usage.total`, Hermes `--usage-file` (including its automatic title call).
 
 ### By phase (all tickets)
 
 | Phase | Runs | Model requests | Reported tokens | Share |
 |---|---:|---:|---:|---:|
-| Planning (dispatch plan + assignments) | 17 | 34 | 80,419 | 0.5% |
-| Coding (first builder attempt per ticket) | 6 | 162 | 2,345,612 | 15.4% |
-| Testing (first tester run per ticket) | 7 | 112 | 1,567,928 | 10.3% |
-| Review (first review per ticket) | 2 | 4 | 25,646 | 0.2% |
-| **Retries: coding** (later builder attempts) | 11 | 139 | 1,723,542 | 11.3% |
-| **Retries: testing** (re-runs, focused corrections) | 7 | 84 | 996,858 | 6.5% |
-| **Retries: review** | 8 | 16 | 125,561 | 0.8% |
-| **Aborted tester runs** (hit the wall-clock deadline, produced nothing usable) | 3 | 145 | 8,394,471 | **55.0%** |
+| Planning (dispatch plan + assignments) | 20 | 40 | 96,042 | 0.5% |
+| Coding (first builder attempt per ticket) | 8 | 212 | 3,096,764 | 16.0% |
+| Testing (first tester run per ticket) | 13 | 200 | 4,018,254 | 20.7% |
+| Review (first review per ticket) | 4 | 8 | 42,907 | 0.2% |
+| **Retries: coding** (later builder attempts) | 13 | 178 | 2,323,955 | 12.0% |
+| **Retries: testing** (re-runs, focused corrections) | 8 | 101 | 1,239,600 | 6.4% |
+| **Retries: review** | 10 | 20 | 174,954 | 0.9% |
+| **Aborted tester runs** (hit the wall-clock deadline, produced nothing usable) | 3 | 145 | 8,394,471 | **43.3%** |
 | Invalid reviewer reply (malformed JSON, rejected by the harness) | 1 | 2 | 13,909 | 0.1% |
-| **Total reported** | | | **15,273,946** | |
+| **Total reported** | | | **19,400,856** | |
 
-Runs without a model call (deterministic test runs, publishing tests, escalations) cost 0 and are not counted.
+Runs without a model call (deterministic test runs, publishing tests, escalations) cost 0 and are not counted. Tickets #25 and #27 (added on 2026-10-15) contributed 3,026,133 and 1,100,777 reported tokens; none of their runs was aborted. Two runs have a usage record of 0 because the runtime reported none (see below), so the 80 runs here include them.
 
 ### By agent, model and ticket
 
 | Agent | Model | Reported tokens |
 |---|---|---:|
-| tester | `gpt-oss:120b` (10,471,065) + `gpt-oss:20b` (488,192) | 10,959,257 |
-| builder | `gpt-oss:120b` | 4,069,154 |
-| reviewer | `nemotron-3-super` | 165,116 |
-| dispatch | `nemotron-3-ultra` | 80,419 |
+| tester | `gpt-oss:120b` (13,015,272) + `gpt-oss:20b` (637,053) | 13,652,325 |
+| builder | `gpt-oss:120b` | 5,420,719 |
+| reviewer | `nemotron-3-super` | 231,770 |
+| dispatch | `nemotron-3-ultra` | 96,042 |
 
-| Ticket | #4 | #5 | #6 | #7 | #8 | #16 | planning |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Reported tokens | 1,510,105 | 1,566,417 | 786,019 | 1,089,886 | 1,180,241 | 9,135,990 | 5,288 |
+| Ticket | #4 | #5 | #6 | #7 | #8 | #16 | #25 | #27 | planning |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Reported tokens | 1,510,105 | 1,566,417 | 786,019 | 1,089,886 | 1,180,241 | 9,135,990 | 3,026,133 | 1,100,777 | 5,288 |
 
-Excluding the three aborted runs, the whole project used **6,879,475** reported tokens.
+Excluding the three aborted runs, the whole project used **11,006,385** reported tokens. (Before tickets #25 and #27 this was 6,879,475.)
 
 ### Where the tokens went, in plain words
 
-1. **More than half (55%) was three aborted tester runs.** OpenClaw has no per-run limit on model requests,
+1. **Three aborted tester runs are still the largest single item (43.3%).** OpenClaw has no per-run limit on model requests,
    only a wall-clock deadline. Two runs on ticket #16 made 29 and 101 requests before the deadline and produced
-   no file changes; they alone account for 8.2M reported tokens. Lesson: a hard request cap is needed before
+   no file changes; they alone account for 8.2M reported tokens. The share fell from 55% only because tickets #25 and #27 added
+   4.1M tokens of work that completed. Lesson: a hard request cap is needed before
    giving an agent an open-ended edit task (see [improvements](#12-what-i-would-change)).
-2. **The builder and tester dominate the useful spend.** Review and planning together are under 2%.
-3. **Retries cost 18.6% of the total (41% of the non-aborted spend).** Most were caught by the tester's tests,
+2. **The builder and tester dominate the useful spend** (tester 70% and builder 28% of all reported tokens). Review and planning together are 1.7%.
+3. **Retries cost 19.3% of the total (34% of the non-aborted spend).** Most were caught by the tester's tests,
    not the reviewer (see section 5).
 
 ### What these totals do and do not mean (please read)
@@ -173,8 +174,8 @@ Excluding the three aborted runs, the whole project used **6,879,475** reported 
   tokens) again on every model request, so it grows with the number of requests. Treat OpenClaw totals as a
   consistent *relative* measure of work, not a bill. Hermes totals are close to input + output plus its automatic title call (cross-check below).
 - **The aborted runs' numbers are partial.** They are what the runtime returned when the deadline hit.
-- **One run has no usage record.** Ticket #7's builder attempt 3 hit its deadline and OpenClaw returned no
-  usage; the ledger records it as 0 although it did consume tokens (unknown).
+- **Two runs have no usage record.** Ticket #7's builder attempt 3 hit its deadline, and ticket #25's Tester run T3 hit a gateway timeout; OpenClaw returned no
+  usage for either, so the ledger records 0 although both consumed tokens (unknown). The true total is higher than reported by an unknown amount.
 - `openclaw gateway usage-cost` returned zeros for this profile, so **OpenClaw numbers have no second source**; only the Hermes numbers could be cross-checked (next subsection).
 - **Turn budgets were advisory.** "Max turns" was a prompt hint plus a wall-clock deadline; runs routinely
   exceeded it (for example 27 requests against a budget of 12).
@@ -182,7 +183,7 @@ Excluding the three aborted runs, the whole project used **6,879,475** reported 
 ### Cross-check of the Hermes numbers against Hermes's own records
 
 The brief points to `hermes insights` for token tracking. We compared it, and Hermes's session exports, with
-the ledger. Hermes sessions were matched to ledger runs by start time (every pair within 8.5 s).
+the ledger. **This cross-check was done on the first 99 ledger events (tickets up to #16) and was not repeated for tickets #25 and #27**, so the counts in this subsection are for that period. Hermes sessions were matched to ledger runs by start time (every pair within 8.5 s).
 
 | | Ledger runs | Hermes sessions | Paired | Ledger tokens | Paired sessions' in+out | `hermes insights` total |
 |---|---:|---:|---:|---:|---:|---:|
@@ -205,7 +206,7 @@ What explains the differences (measured, not guessed):
    tokens (1.3%) that we did not itemize; it is probably auxiliary calls for those extra sessions, but that is an
    inference.
 
-We did not add any estimate for the missing OpenClaw usage record (ticket #7, attempt 3) or for the unledgered
+We did not add any estimate for the missing OpenClaw usage records (ticket #7 attempt 3; ticket #25 run T3) or for the unledgered
 sessions to the totals above; the report states only what the runtimes reported.
 
 ---
@@ -213,7 +214,7 @@ sessions to the totals above; the report states only what the runtimes reported.
 ## 5. What broke, and how it was handled
 
 The system caught real problems; most were caught by tests the tester wrote, one by the reviewer, several by
-the human reading output. None of the product code below was fixed by a human.
+the human reading output. None of the product code below was fixed by a human; the few test-only commits a human made are listed in [section 9](#9-human-involvement-and-disclosures).
 
 | # | What broke | How it was caught | Resolution |
 |---|---|---|---|
@@ -229,11 +230,21 @@ the human reading output. None of the product code below was fixed by a human.
 | 10 | **#8: a genuine reviewer rejection** ("use lifespan, not `on_event`") after one malformed reviewer reply that the harness refused | Reviewer | Scoped builder fix, approved on the same ticket |
 | 11 | **Live test (#16): Google News returns HTTP 302 and the app did not follow it, so the merged app could not ingest anything; 4 of 10 model summaries were empty** (the reasoning model spent its token budget thinking) | Human-supervised run against the real feed and Ollama Cloud. All offline tests had passed. | Ticket #16 through the normal workflow; the tester's tests then found two *new* defects in the builder's fix (`URL(base=…)` is not valid httpx; a path returned `None`); fixed on attempt 2 |
 | 12 | **#16: two tester runs aborted at the deadline (8.2M reported tokens)** | Harness | See the token section; the tester's finished partial edit was recovered; the rest (test doubles) was fixed by the human, disclosed as human-assisted maintenance |
+| 13 | **#25: Builder attempt 1 broke the existing `title[:120]` fallback contract** and left plain-text test mocks | Failing tests | Builder attempts 2 and 3, with human-written task text (below) |
+| 14 | **#25: the Tester on `gpt-oss:20b` wrote no tests** (tool errors); later runs left a missing import, state leaking between test files and malformed mocks; one rewrite **dropped three tests**; one run (T3) hit a gateway timeout and **reported no usage** | Harness escalation (`needs-human`), then failing tests | Human-authorized rerun on `gpt-oss:120b`, then two focused reruns with human-written focus text; five Tester runs in total |
+| 15 | **#25: Dispatch's attempt-2 instruction told the Builder to remove the 120-character logic, contradicting the ticket** | Human read the handoff | A human-written task file replaced the ticket text for Builder attempts 2 and 3 (the full original issue was preserved and a clarification added) |
+| 16 | **#25: Builder attempt 2 added a plain-text compatibility path the ticket forbids** | An existing Tester test failed on it | Builder attempt 3 removed it |
+| 17 | **#25: the Reviewer's first review (R1) was a genuine rejection** (three required regression tests were missing after the Tester's rewrite) | Reviewer | **Human-assisted test-only commits**: `4bb2657` (five outdated fixtures corrected) and `94d4c06` (the three tests restored); the Reviewer then approved (R2) |
+| 18 | **The merged #25 prompt contradicted itself**: it told the model to include the article title and the word "JSON" in its reply (test requirements copied into the prompt). Tests, Tester and Reviewer all passed it. | The human's deployment-readiness audit of the merged PR, before anything was deployed | Issue #27, delivered through the agent workflow ([evidence](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/INDEX.md)) |
+| 19 | **#27: the Tester's first file contained literal `\n` sequences** (the same defect as #7), so pytest failed at collection | `agent/test` = failure | One focused Tester rerun with a human-written note, disclosed on the PR; it wrote a valid file |
+| 20 | **#27: the Reviewer approved while two acceptance criteria were weakly covered** (a reworded contradictory instruction, and the title appearing twice in the prompt). The Reviewer sees only the issue, diff and test output, so it cannot see coverage gaps. | The human's independent mutation checks in a disposable worktree | **Human-assisted test-only commit** `b1bbe53` (two tests, 27 lines appended); a fresh review approved it |
+| 21 | **Production: model summaries are not guaranteed to be grounded in the headline**, and six homepage rows still had legacy first-word tags | The human's review of the first new-pipeline output | Not fixed in code. The six tags were corrected by hand as human-assisted data maintenance; the grounding limitation is documented in [section 11](#11-known-issues-and-limitations) |
 
 **The single most instructive failure** is #11: every offline test, review and approval passed, and the merged
 application still could not fetch its only data source. The live run was the real test.
 
-**The reviewer produced one genuine rejection in six tickets** and approved flawed commits on #4 three times.
+**The reviewer produced two genuine rejections in eight tickets** (#8 and #25) and approved flawed commits on #4
+three times, on #25's self-contradicting prompt, and on #27's weakly covered criteria.
 Its summaries are generic. The effective quality gate was the tester's executable tests plus deterministic
 re-runs; the reviewer is a weaker second gate (see improvements).
 
@@ -275,8 +286,8 @@ agent environment, and the brief's wish for the whole team on the VM is not met.
   with SSH from one /32, HTTP, HTTPS and egress. No NAT gateway, load balancer, database or IAM role. A fresh
   `terraform plan` after the final apply showed no changes.
 - **Public URL:** https://3-13-197-253.sslip.io (Caddy with an automatically issued certificate, `sslip.io` hostname). `/`, `/api/articles`
-  return 200; `/docs`, `/redoc` return 404; writes return 405. The code is the pinned commit
-  `f3349a039d7a1046ec5505286be7ad906158ab71` (identical to the Cloudflare deployment).
+  return 200; `/docs`, `/redoc` return 404; writes return 405. The code was first the pinned commit
+  `f3349a039d7a1046ec5505286be7ad906158ab71`; since 2026-10-15 it is **`b62706aa7dcd25fc8885ce350607c6d2eb02ddaf`** (see below).
 - **Region:** the first proposal targeted `us-west-2` (Oregon). AWS restricted the author's Free Plan project to
   `us-east-2` and states Oregon is unavailable without upgrading, so the plan moved to Ohio. The earlier `aws login`
   failures had used Oregon; `aws login --region us-east-2` succeeded on the first try. Terraform ran with that
@@ -308,12 +319,18 @@ agent environment, and the brief's wish for the whole team on the VM is not met.
   (run 3 summarised more) the latest 10 were 8 model, 2 fallback; the whole database was 23 model summaries (22
   `gpt-oss:20b`, 1 `nemotron-3-nano:30b`), 13 title fallbacks and 64 not yet summarised. Summaries are filled in a
   limited batch per refresh, so coverage grows with later refreshes.
-- **Scheduled refresh: pending, not claimed.** Refresh runs 1-3 on the VM were all **startup** refreshes (first
-  boot, a manual service restart, the reboot). Nothing has yet fired from the 180-minute timer: the next one is due
-  about 10:35 UTC on 2026-10-12 (180 minutes after run 3 finished). The same code was seen firing exactly 180 minutes
-  after the previous run on the Mac deployment (section 8); it has not been observed on AWS. No refresh was
-  triggered artificially.
-- **Not yet verified on AWS:** the scheduled refresh above and uptime beyond the first hours.
+- **Scheduled refresh: verified on AWS (2026-10-15).** The first three runs were startup refreshes. A read-only check of the VM's
+  `refresh_runs` table on 2026-10-15 showed 32 runs; each recent timer-driven run (runs 27 to 31) started exactly 180 minutes after
+  the previous run finished (for example run 30 finished 16:51:41Z and run 31 started 19:51:41Z). Run 32 was the startup refresh after
+  the deployment below. No refresh was triggered artificially.
+- **Not yet verified on AWS:** uptime over a longer period.
+- **Update to `b62706a` (2026-10-15, human-assisted production maintenance).** After PR #28 merged, the AWS site was updated by hand
+  (Terraform ignores application code, and `app_git_ref` in `infra/aws/variables.tf` still names `f3349a0`, so a fresh VM would start from
+  that older commit): a verified SQLite backup first, a fast-forward to `b62706a`, an import check, one service restart (the site answered
+  again after 27 s) and a check that the 259 existing articles were unchanged. The startup refresh then summarized four new articles
+  with exactly four model calls, all on `gpt-oss:20b` with tags from the new taxonomy. Six older homepage rows with legacy tags were then
+  corrected by a one-transaction, tag-only database update. This was done by the human with Claude Code, not by the agents; the details and
+  the origin of each tag are in the [public summary](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/PRODUCTION-MAINTENANCE.md). Backups and operation records are kept privately and not published.
 - **Exposure:** within minutes of going live an outside scanner requested `/.env`, `/config.json`, `/api/config`
   and similar paths; all returned 404.
 
@@ -330,12 +347,13 @@ agent environment, and the brief's wish for the whole team on the VM is not met.
    Elastic IP association kept their IDs.
 Both were bugs in the Terraform written for this project, found only by planning and applying against a real account.
 
-### Fallback deployment: Cloudflare Quick Tunnel from the author's Mac
+### Retired: Cloudflare Quick Tunnel from the author's Mac
+
+**This fallback is no longer running** (retired 2026-10-15). Its URL (`*.trycloudflare.com`) no longer answers, and the local container still holds the older code. The AWS URL above is the only live site. What follows describes the fallback as it was while it ran.
 
 - `deploy/run-newsroom.sh` serves the merged app from an immutable `git archive` in a hardened container bound
   to `127.0.0.1:8000` and points `cloudflared` at that single port (the brief's documented emergency fallback).
-- **Verified running code:** byte-identical to `app/` on `main` at `f3349a0` (`app/` is unchanged on `main`
-  since). The container has run continuously since 2026-10-12 02:31Z.
+- **Verified running code (while it ran):** byte-identical to `app/` on `main` at `f3349a0`. It was never updated to #25 or #27.
 - **Limitations:** the `trycloudflare.com` URL changes whenever the tunnel restarts; the Mac must stay awake and
   online; Quick Tunnels have no uptime guarantee.
 - **Exposure checks before the URL was shared** (local and through the tunnel): loopback-only port binding;
@@ -401,30 +419,45 @@ written its tests to a path the harness did not expect.
 | Direct push to `main` | Blocked by the ruleset (HTTP 422), verified (`docs/traces/permission-test.md`) |
 | Builder cannot post `agent/review` / `agent/test` | Verified: HTTP 403 with the builder token |
 | Machine account cannot approve its own PR | Verified (PR #1) |
-| Six agent-authored PRs | Each merged with `agent/review` **and** `agent/test` = success on the merged head commit, approval by the human |
+| Eight agent-authored PRs (#9, #11, #13, #14, #15, #17, #26, #28) | Each merged with `agent/review` **and** `agent/test` = success on the merged head commit, approval by the human, no ruleset bypass. PRs #26 and #28 each contain human-assisted test-only commits, disclosed on the PR ([section 9](#9-human-involvement-and-disclosures)). |
 | Tests run offline | Builder and tester tests ran in a container with `--network none`, read-only root, no capabilities, no tokens |
 
-### Independent product verification (read-only checks, 2026-10-11 evening PDT)
+### Independent product verification (read-only checks; the first set was run 2026-10-11 evening PDT, updated 2026-10-15)
 
 | Check | Result |
 |---|---|
-| Product tests on `main`, offline container | **38 passed** (builder and tester tests from tickets #4-#8 and #16) |
-| Harness tests | **37 passed** |
+| Product tests on `main`, offline container | **59 passed** on `b62706a` (re-run 2026-10-15; builder and tester tests from tickets #4-#8, #16, #25 and #27, including the three human-assisted tests described in section 9; it was 38 on 2026-10-11) |
+| Harness tests | **37 passed** (re-run 2026-10-15; the harness was not changed by #25 or #27) |
 | Secrets and forbidden files tracked on `main` | none found (token patterns, key blocks, cloud IDs; no state, tfvars, env, token, ledger or database files) |
-| Live site | HTTP 200; 10 articles in the API; the page shows real headlines, model-written summaries, tags, source links and "updated N minutes ago" |
-| **Scheduled refresh, live** | `refresh_runs` has two rows. Run 1 started at startup (02:31:28Z, 100 fetched, 100 new). **Run 2 started on its own at 05:32:52Z, exactly 180 minutes after run 1 finished** (02:32:52Z): 100 fetched, **6 new** (94 duplicates skipped by the unique source URL). |
-| Summaries, live | 105 articles stored; 24 summarized (the per-refresh cap of 12 applied twice): 23 `model` (`gpt-oss:20b`), 1 title `fallback`; none empty |
+| Live site (2026-10-11, Mac deployment) | HTTP 200; 10 articles in the API; the page shows real headlines, model-written summaries, tags, source links and "updated N minutes ago" |
+| **Scheduled refresh, Mac deployment** | `refresh_runs` has two rows. Run 1 started at startup (02:31:28Z, 100 fetched, 100 new). **Run 2 started on its own at 05:32:52Z, exactly 180 minutes after run 1 finished** (02:32:52Z): 100 fetched, **6 new** (94 duplicates skipped by the unique source URL). |
+| Summaries, Mac deployment | 105 articles stored; 24 summarized (the per-refresh cap of 12 applied twice): 23 `model` (`gpt-oss:20b`), 1 title `fallback`; none empty |
+| AWS site, 2026-10-15 | HTTP 200 at https://3-13-197-253.sslip.io; the 10 newest articles all carry a taxonomy tag; 263 articles stored; the database `integrity_check` is ok; recent scheduled refreshes fired exactly 180 minutes apart |
 
 ---
 
 ## 9. Human involvement and disclosures
 
-**Administrative bypass merges.** PRs #2, #3, #10, #12, #18 and #19–#23 are human-written (#19–#23 change only documentation, deployment
+**Administrative bypass merges.** PRs #2, #3, #10, #12, #18 and #19–#24 are human-written (#19–#24 change only documentation, deployment
 scripts and `infra/aws/`, not `app/`), have no `agent/*` statuses on their head commits
 (checked on GitHub), and were merged by `Ankita2525` through the ruleset's pull-request bypass, the only way to merge
 a PR with no `agent/*` statuses. **The agent review and test checks did not run on these PRs and are not claimed to
-have passed.** All six agent-authored PRs (#9, #11, #13, #14, #15, #17) merged normally with both statuses green.
-Branch protection was never disabled.
+have passed.** The documentation update that added tickets #25 and #27 to this report is likewise a human-written PR with no agent
+statuses; it cannot satisfy the required checks, and the PR page shows how it was merged. All eight agent-authored PRs (#9, #11, #13, #14, #15, #17, #26, #28) merged normally with both statuses
+green on the merged head and a human approval. Branch protection was never disabled.
+
+### Three kinds of work, kept apart
+
+| Kind | What it covers | Evidence |
+|---|---|---|
+| **Agent-authored implementation** | All of `app/`: the Builder's commits (#25: `655bdd6`, `a24a227`, `0fa4f31`; #27: `e603085`), the Tester's acceptance tests (#25: `540007b`, `3f63f0f`, `798da01`; #27: `31e6b9d`, `d63ca81`), Dispatch assignments, Hermes reviews. Some runs were directed by human-written task or focus text, which is quoted in the evidence. | [#25 index](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-25/docs/evidence/issue-25/INDEX.md), [#27 index](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/INDEX.md) |
+| **Human-assisted tests** (not agent output) | Test-only commits made by the human with Claude Code on agent PRs, each disclosed in a PR comment and a commit message: **`4bb2657`** (#25: five outdated fixtures corrected), **`94d4c06`** (#25: three dropped tests restored, append-only), **`b1bbe53`** (#27: two regression tests, 27 lines appended). Earlier, `2f9d2b2` (#16). No application code was changed by a human in any of these. | PR #26 comments, PR #28 comments, the indexes above |
+| **Human-assisted production maintenance** (not agent work, not attributable to Hermes or OpenClaw) | The pre-deploy backup, the manual deployment of `b62706a` to AWS, the Phase 1 candidate generation (7 model calls, 5,599 provider-reported tokens, no database write), the grounding reviews, and the **six tag-only corrections** (four tags taken from model candidates, two selected by the human). | [Public summary](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/PRODUCTION-MAINTENANCE.md) |
+
+**The six tag-only corrections, for the record.** Articles 2986 (`meta` to `products`), 2988 (`the` to `hardware`), 3005 (`google` to `tools`)
+and 2886 (`explores` to `business`) took the tag the deployed pipeline proposed in Phase 1. Article 2998 (`google` to `tools`) and 2898 (`ai`
+to `general`) were chosen by the human: the model fell back to the title for 2998, and its proposed tag for 2898 was not supported by the
+truncated headline. One atomic transaction changed exactly six rows and only `topic_tag`; no summary was altered.
 
 **Written by the human with Claude Code (AI assistance), not by the agents:** `orchestrator/` (the harness and
 its tests), `agents/` prompts and configuration, `scripts/`, `docker/test-runner/`, `deploy/`, `infra/`,
@@ -444,6 +477,12 @@ The product brief (`agents/shared/brief.md`) is human-written.
   doubles in `test_ticket_4.py` and `test_ticket_16.py`**. It is authored and committed by the human, pushed
   with the machine account's token so the human could still approve. **That commit is not agent output.** No
   production code was changed by a human.
+- **#25:** wrote the ticket (filed through the harness with a disclosure line); authorized a Tester rerun on `gpt-oss:120b` after the
+  first run wrote no tests; wrote the focus text for two Tester reruns and the task text (full original ticket plus clarification) for
+  Builder attempts 2 and 3; made the two test-only commits `4bb2657` and `94d4c06`; approved and merged PR #26.
+- **#27:** wrote the ticket from the deployment-readiness audit; wrote one Tester focus note (quoted verbatim in the evidence); made the
+  test-only commit `b1bbe53` after independent mutation checks; approved and merged PR #28.
+- **Production maintenance after #28** (see the table above): backup, manual deploy of `b62706a`, grounding review, six tag-only corrections.
 
 **Credential boundary.** Four fine-grained tokens exist (dispatch, builder, reviewer, tester) but they belong to
 one machine account, so GitHub cannot tell them apart in the UI and any token with commit-status write could
@@ -469,8 +508,8 @@ The agents are a Mac-based procedure. The public app on a VM is reproducible wit
    in its own terminal.
 5. **Run the team:** `python3 -m orchestrator plan`, then repeat `python3 -m orchestrator step`
    (assign, build, test, review). Token report: `python3 -m orchestrator report`.
-6. **Deploy:** `deploy/run-newsroom.sh origin/main` (waits up to 5 minutes for the first refresh, then opens the
-   tunnel and prints the URL).
+6. **Deploy (Mac fallback, retired):** `deploy/run-newsroom.sh origin/main` (waits up to 5 minutes for the first refresh, then opens the
+   tunnel and prints the URL). The tunnel is no longer used; the AWS site (step 9) is the live deployment.
 7. **Harness tests:** `uv run --python 3.14 --with pytest python -m pytest -q orchestrator/tests`.
    **Agent configuration snapshots:** `python3 scripts/snapshot_agent_configs.py` regenerates them (sanitized).
 8. **Oracle (not completed):** `infra/` with `terraform.tfvars` from the example; expect the capacity error
@@ -479,6 +518,11 @@ The agents are a Mac-based procedure. The public app on a VM is reproducible wit
    `terraform.tfvars` (`ssh_allowed_cidr`), create the key with `ssh-keygen -t ed25519 -f ~/.ssh/confer_aws_ed25519`,
    run `terraform init`, `terraform plan` (expect 9 to add), then `terraform apply`, and install the model key over
    SSH as the README shows. It needs an AWS CLI session with EC2 rights in `us-east-2`.
+10. **Update the AWS app after a merge (manual; Terraform does not redeploy code).** This is what was done for `b62706a`: on the VM, take
+    an online backup of the SQLite database with its backup API and verify it (`integrity_check`, article count); fast-forward the clone
+    in `/opt/newsroom/src` to the merged commit and import-check the new code with the service's Python; run `systemctl restart newsroom`
+    once; wait for the site to answer (startup refresh, about 25 to 70 s); then compare the deployed commit, `integrity_check` and the
+    existing rows with the backup. `infra/aws/variables.tf` (`app_git_ref`) is not updated by this and still names `f3349a0`.
 
 ---
 
@@ -488,19 +532,28 @@ The agents are a Mac-based procedure. The public app on a VM is reproducible wit
   observed), so the site is unreachable for that long after any restart. Tests could not see this.
 - **`/docs`, `/redoc` and `/openapi.json` are public.** They describe the two read-only routes; no secrets and
   no write endpoints.
-- **Topic tags are weak:** the first word of the summary, as the ticket specified ("find", "one", "ai").
-- **800 completion tokens is marginal for reasoning models**; some articles fall back to the marked title.
-- **Hosting:** the URL changes if the tunnel restarts; the Mac must stay awake; no uptime guarantee.
+- **Legacy tags remain on older rows.** Topic tags were the first word of the summary until PR #26; since `b62706a` new rows use an
+  11-tag taxonomy. Rows stored before that were not reprocessed: 236 of the 263 stored articles still carry a legacy tag (checked
+  2026-10-15 after the six homepage corrections), so only recently summarized rows show clean tags.
+- **Summaries are not guaranteed to be grounded in the headline.** Strict JSON and Pydantic validation (#25) make the output *format*
+  consistent: one line, at most 160 characters, a tag from a fixed list. They do not ensure that a summary contains only claims the
+  headline supports, because the model sees only the title (the RSS description is not used) and sometimes adds plausible details. A
+  human review of nine new-pipeline summaries found 1 supported, 5 partially supported and 3 unsupported. **This is a small,
+  non-representative sample judged by one reader, not an error rate.** It shows the failure mode exists; it does not measure how often.
+  See the [public summary](https://github.com/newsroom-ak/autonomous-newsroom/blob/evidence/issue-27/docs/evidence/issue-27/PRODUCTION-MAINTENANCE.md). Suggested follow-up ticket: tell the model to use only the information in the title and/or feed it the RSS description.
+- **800 completion tokens is marginal for reasoning models**; some articles fall back to the marked title (on 2026-10-15 one candidate reprocessing of a homepage article did, with both models hitting the cap).
+- **Hosting:** the single AWS VM has no redundancy or uptime guarantee, and code updates are a manual procedure (section 10, step 10). The Cloudflare Quick Tunnel fallback is retired.
 - **The VM hosts only the public app.** The agent environment is not reproduced on it, and Terraform ran with a
-  full-access AWS role from a temporary login, not the least-privilege user in the plan. The scheduled refresh is not yet
-  verified on AWS (a reboot was).
-- **Token ledger gaps:** one OpenClaw run has no usage record, five Hermes verification sessions (19,007 tokens)
-  are not in the ledger, and OpenClaw totals have no independent source (section 4).
+  full-access AWS role from a temporary login, not the least-privilege user in the plan.
+- **Token ledger gaps:** two OpenClaw runs have no usage record (#7 builder attempt 3 and #25 Tester run T3), five Hermes verification sessions (19,007 tokens)
+  are not in the ledger, the Hermes cross-check was not repeated for #25 and #27, and OpenClaw totals have no independent source (section 4).
 - **Builder's own `test_scheduler.py`** starts and stops the scheduler in separate event loops, so it checks less
   than it looks like; the tester's acceptance tests cover the real behaviour.
 - **No request cap on agent runs** and advisory turn budgets (see section 4).
 - **Single machine account** for all four agents; separation is by token scope and harness convention.
 - **The first live run found real defects that offline tests could not.** Further live-only defects may remain.
+- **The agent Reviewer cannot see coverage gaps.** It receives only the issue, the diff and the test output; on #27 it approved while two
+  criteria were weakly covered, and a human-led mutation check found them.
 
 ---
 
@@ -511,13 +564,18 @@ The agents are a Mac-based procedure. The public app on a VM is reproducible wit
 2. **Shrink OpenClaw's per-request prompt** (a minimal tool profile and short workspace files) to cut the
    dominant cost.
 3. **Give the reviewer a stronger model and a harder job**: it approved flawed commits; the fix started here
-   (it now sees the committed tests and pytest output) but it still produced one rejection in six tickets.
+   (it now sees the committed tests and pytest output) but it still produced only two rejections in eight tickets and approved the self-contradicting prompt on #25.
 4. **Run a live smoke test as part of the workflow** (real feed, one real model call) so defects like the Google
    News redirect are caught before merge.
 5. **Move the first refresh into a background task** so the server answers immediately, and disable `/docs`.
-6. **Hosting:** the AWS VM exists; I would add a least-privilege IAM role for Terraform, a real domain name, and
-   retire the Quick Tunnel once the AWS scheduler has been seen firing.
+6. **Hosting:** the AWS VM exists and its scheduler has been seen firing; the Quick Tunnel is retired. I would add a least-privilege IAM role for Terraform, a real domain name, and
+   automated deployment of merged code (today it is a manual, documented procedure).
 7. **Per-agent identities** (one OpenRouter key per agent, Langfuse for traces) to get independent usage numbers
    and GitHub-enforced separation.
 8. **Smaller tickets** and a rule that a builder may not claim an edit it did not make (the tool-failure
    recording is a first step).
+9. **Ground the summaries**: give the model the RSS description and an instruction to use only the information provided, and add a check
+   that flags summaries containing claims absent from the source text.
+10. **Show the Reviewer coverage evidence** (a mutation or coverage report), and fail a ticket's tests if a prompt-level criterion can be
+    broken without a test failing; on #27 this was found only by a human.
+11. **Make Tester output self-checking**: compile the file before publishing it (the literal `\n` defect occurred on #7 and again on #27).

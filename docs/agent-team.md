@@ -166,6 +166,18 @@ python3 -m orchestrator report           # token & model report
 uv run --python 3.14 --with pytest python -m pytest -q orchestrator/tests
 ```
 
+## Lessons from tickets #25 and #27
+
+No harness code changed while delivering these two tickets; what follows is behaviour worth knowing.
+
+- `--task-file` **replaces** the whole ticket text for a Builder run, so a human-written task file must include the full original
+  issue plus any clarification (this is how #25's attempts 2 and 3 kept the original criteria).
+- A Tester focus run (`--focus-file`) uses a session id with a `-recheck` suffix; a plain rerun reuses the earlier session id.
+- Hermes Reviewer sees only the issue, the diff and the test output, so it cannot notice weak coverage; on #27 two gaps were found
+  only by a human-led mutation check and closed with a disclosed test-only commit.
+- A Tester file with literal `\n` sequences (seen on #7 and #27) fails at pytest collection; a focused rerun fixes it.
+- Usage can be missing: a gateway timeout returned no usage for one Tester run on #25, so the ledger records 0 for it.
+
 ## Known limitations
 
 - All four agents act through one GitHub machine account (`newsroom-ak-bot`), so GitHub
