@@ -86,7 +86,7 @@ def test_multiline_summary(monkeypatch):
                     # The raw model content includes a newline inside the summary.
                     return {
                         "choices": [
-                            {"message": {"content": "{\"summary\": \"Line one.\nLine two.\", \"tag\": \"research\"}"}}
+                            {"message": {"content": "{\"summary\": \"Line one.\\nLine two.\", \"tag\": \"research\"}"}}
                         ]
                     }
 

@@ -297,7 +297,7 @@ def test_primary_429_triggers_fallback(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback from 429."}}]}
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback from 429.\", \"tag\": \"general\"}"}}]}
 
                 return Resp()
 
@@ -341,7 +341,7 @@ def test_primary_timeout_triggers_fallback(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback from timeout."}}]}
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback from timeout.\", \"tag\": \"general\"}"}}]}
 
                 return Resp()
 
@@ -396,7 +396,7 @@ def test_max_summaries_limit(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": f"Summary {json['model']}"}}]}
+                    return {"choices": [{"message": {"content": "{\"summary\": \"Summary " + json["model"] + "\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 
@@ -435,7 +435,7 @@ def test_resummarize_on_title_change(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "Summary A"}}]}
+                    return {"choices": [{"message": {"content": "{\"summary\": \"Summary A\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 
