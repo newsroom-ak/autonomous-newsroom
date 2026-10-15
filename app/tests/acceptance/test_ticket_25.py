@@ -318,3 +318,114 @@ def test_fallback_contract_literal(monkeypatch):
         conn.close()
         _teardown_temp_db(db_path, old_env)
 
+
+
+# ---------------------------------------------------------------------------
+# Restored acceptance tests (HUMAN-ASSISTED restoration, not OpenClaw Tester output).
+#
+# These three tests come from the OpenClaw Tester's earlier version of this file
+# (commit 540007b). They were lost when the Tester rewrote the file in commit
+# 3f63f0f, and the Hermes Reviewer requested them back. The human engineer restored
+# them with Claude Code. Differences from 540007b: the four small helpers below are
+# copied unchanged; the prompt test lists the allowed tags from the ticket literally
+# (it no longer depends on an implementation constant) and only requires the article
+# title to appear in the prompt.
+# ---------------------------------------------------------------------------
+
+def _set_env(monkeypatch):
+    """Set deterministic environment variables for the model URLs and names.
+    The tests rely on known model identifiers so we can assert on the DB values.
+    """
+    monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+    monkeypatch.setenv("SUMMARY_FALLBACK_URL", "https://fallback.test/v1")
+    monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "primary-model-test")
+    monkeypatch.setenv("SUMMARY_FALLBACK_MODEL", "fallback-model-test")
+    monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "primary-key")
+    monkeypatch.setenv("SUMMARY_FALLBACK_KEY", "fallback-key")
+
+
+def _mock_call_model(monkeypatch, response: str):
+    """Patch ``summarize._call_model`` to return the supplied raw response string.
+    """
+    _set_env(monkeypatch)
+    monkeypatch.setattr(
+        summarize,
+        "_call_model",
+        lambda url, key, model, prompt: response,
+    )
+
+
+def _capture_prompt(monkeypatch):
+    """Replace ``summarize._call_model`` with a wrapper that records the prompt.
+    Returns a dict that will be populated with the last ``prompt`` string.
+    """
+    captured: dict = {}
+
+    def _wrapper(url, key, model, prompt):
+        captured["prompt"] = prompt
+        # Return a minimal valid JSON reply so the pipeline proceeds.
+        return '{"summary":"OK","tag":"research"}'
+
+    monkeypatch.setattr(summarize, "_call_model", _wrapper)
+    return captured
+
+
+def _assert_db_row(conn, expected_summary, expected_tag, expected_source, expected_model):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT summary, topic_tag, summary_source, summary_model FROM articles"
+    )
+    summary, tag, source, model = cur.fetchone()
+    assert summary == expected_summary
+    assert tag == expected_tag
+    assert source == expected_source
+    assert model == expected_model
+
+
+# The eleven tags allowed by Issue #25.
+_ISSUE_25_TAGS = (
+    "research", "models", "products", "tools", "hardware", "policy",
+    "safety", "business", "open-source", "education", "general",
+)
+
+
+def test_fenced_json_reply(monkeypatch):
+    db_path, conn, old = _setup_temp_db()
+    try:
+        _mock_feed_single("Title")
+        raw = """```json\n{ \"summary\": \"One sentence summary.\", \"tag\": \"models\" }\n```"""
+        _mock_call_model(monkeypatch, raw)
+        refresh._run_refresh()
+        _assert_db_row(conn, "One sentence summary.", "models", "model", "primary-model-test")
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old)
+
+
+def test_mis_cased_tag(monkeypatch):
+    db_path, conn, old = _setup_temp_db()
+    try:
+        _mock_feed_single("Title")
+        _mock_call_model(monkeypatch, '{"summary":"Valid.", "tag":"ReSeArCh"}')
+        refresh._run_refresh()
+        _assert_db_row(conn, "Valid.", "research", "model", "primary-model-test")
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old)
+
+
+def test_prompt_includes_allowed_tags_and_json(monkeypatch):
+    db_path, conn, old = _setup_temp_db()
+    try:
+        _mock_feed_single("Sample title")
+        captured = _capture_prompt(monkeypatch)
+        refresh._run_refresh()
+        prompt = captured["prompt"]
+        # Issue #25: the prompt must mention JSON, list every allowed tag and include the title.
+        assert "JSON" in prompt
+        for tag in _ISSUE_25_TAGS:
+            assert tag in prompt
+        assert "Sample title" in prompt
+    finally:
+        conn.close()
+        _teardown_temp_db(db_path, old)
