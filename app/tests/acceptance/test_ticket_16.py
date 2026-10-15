@@ -194,14 +194,15 @@ def test_summary_fallback_logic(monkeypatch):
                         return {"choices": [{"message": {"content": "   "}}]}
                 return Resp()
             else:
-                # Fallback returns usable summary.
+                # Fallback returns a valid JSON payload with a usable summary.
                 call_log.append("fallback")
                 class Resp:
                     status_code = 200
                     def raise_for_status(self):
                         pass
                     def json(self):
-                        return {"choices": [{"message": {"content": "A concise fallback summary."}}]}
+                        # Structured JSON reply as required by Ticket #25.
+                        return {"choices": [{"message": {"content": "{\"summary\": \"A concise fallback summary.\", \"tag\": \"education\"}"}}]}
                 return Resp()
 
         # Configure distinct URLs to let the stub differentiate.

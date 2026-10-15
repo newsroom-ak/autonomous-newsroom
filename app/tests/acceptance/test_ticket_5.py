@@ -95,7 +95,9 @@ def test_primary_model_called_and_summary_populated(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "A concise summary."}}]}
+                    # Return a JSON‑structured reply as required by Ticket #25.
+                    # Include a deterministic tag so we can assert it later.
+                    return {"choices": [{"message": {"content": "{\"summary\": \"A concise summary.\", \"tag\": \"research\"}"}}]}
 
             return Resp()
 
@@ -118,8 +120,10 @@ def test_primary_model_called_and_summary_populated(monkeypatch):
         cur = conn.cursor()
         cur.execute("SELECT summary, topic_tag, summary_source, summary_model FROM articles")
         summary, tag, source, model = cur.fetchone()
+        # The summary should be extracted from the JSON payload and stored unchanged.
         assert summary == "A concise summary."
-        assert isinstance(tag, str) and tag  # non‑empty
+        # The tag comes from the JSON reply.
+        assert tag == "research"
         assert source == "model"
         assert model == "test-primary-model"
     finally:
@@ -158,7 +162,8 @@ def test_fallback_on_primary_402(monkeypatch):
                         pass
 
                     def json(self):
-                        return {"choices": [{"message": {"content": "Fallback summary."}}]}
+                        # Return a JSON reply with a tag.
+                        return {"choices": [{"message": {"content": "{\"summary\": \"Fallback summary.\", \"tag\": \"models\"}"}}]}
 
                 return Resp()
 
