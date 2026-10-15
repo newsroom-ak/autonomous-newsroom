@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import shutil
 from typing import Tuple
 
 import pytest
@@ -22,6 +23,9 @@ sys.path.append(
 )
 
 from newsroom import db, refresh, summarize, feed  # noqa: E402
+
+# Preserve the original ``fetch_articles`` implementation to restore after each test and avoid leaking state.
+_original_fetch_articles = feed.fetch_articles
 
 
 def _setup_temp_db() -> Tuple[str, sqlite3.Connection, str | None]:
@@ -44,6 +48,8 @@ def _teardown_temp_db(path: str, old_env: str | None):
         os.environ.pop(db.DB_PATH_ENV, None)
     else:
         os.environ[db.DB_PATH_ENV] = old_env
+    # Restore any monkey‑patched ``feed.fetch_articles`` to its original implementation.
+    feed.fetch_articles = _original_fetch_articles
     # ``temp_dir`` is the parent of the DB file.
     shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
