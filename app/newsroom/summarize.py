@@ -233,12 +233,17 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     # Build a prompt that explicitly asks for JSON output, lists the allowed
     # tags, and includes the article title.
     allowed_tags_str = ", ".join(sorted(ALLOWED_TAGS))
+    # Build a concise prompt that **only** instructs the model to return a JSON
+    # object. The previous version contained two contradictory sentences that
+    # asked the model to include the article title *in the response* and to
+    # literally include the word "JSON". Those instructions broke the contract
+    # that the model must respond with *only* a JSON payload. We replace them with
+    # a single clear sentence: "Return a single valid JSON object."
     prompt = (
         "You are summarizing an article for a news feed. Respond ONLY with a JSON "
         "object (no extra text) containing two keys: \"summary\" and \"tag\". "
         "The summary must be ONE SENTENCE, max 160 characters. The tag must be "
-        f"one of: {allowed_tags_str}. Include the article title in your prompt for context. "
-        "Make sure the JSON is valid and include the word 'JSON' in the response.\n"
+        f"one of: {allowed_tags_str}. Return a single valid JSON object.\n"
         f"Title: {title}\n"
     )
 
