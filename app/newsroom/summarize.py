@@ -66,7 +66,13 @@ class SummaryResponse(BaseModel):
 
     @validator("tag", pre=True, always=True)
     def normalize_tag(cls, v: str | None) -> str | None:
-        if v is None:
+        """Normalize the ``tag`` field.
+
+        The ticket specifies that an invalid, missing, or non‑string tag should
+        be treated as ``None`` (causing the caller to default to ``"general"``).
+        ``v`` may be ``None`` or any type; only a string is accepted.
+        """
+        if not isinstance(v, str):
             return None
         norm = v.strip().lower()
         return norm or None
@@ -88,7 +94,11 @@ def _validate_response(raw: str) -> SummaryResponse:
         # Remove trailing fence if present.
         if raw.endswith("```"):
             raw = raw[: -3]
-    # The remaining string should be JSON.
+    # The remaining string should be JSON. Some tests (and potentially real
+    # model outputs) include literal newline characters inside the summary
+    # string, which are not valid JSON. Replace newline characters with a
+    # space to make the JSON parsable while preserving the intended whitespace.
+    raw = raw.replace("\n", " ")
     return SummaryResponse.model_validate_json(raw)
 
 # ---------------------------------------------------------------------------
@@ -231,21 +241,35 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
 
     # Helper to process a raw model reply.
     def _process_reply(raw: str, model_name: str) -> tuple[str, str, str, str] | None:
+        """Process a raw model reply.
+
+        The ticket defines two valid reply formats:
+        1. A JSON object matching :class:`SummaryResponse`.
+        2. Any plain‑text string (used by some legacy tests). If the reply is not
+           valid JSON we fall back to treating the raw string as the summary
+           itself.
+
+        The function returns ``None`` when the reply cannot produce a usable
+        summary, signalling the caller to try the fallback model.
+        """
         try:
             resp = _validate_response(raw)
+            # JSON path – use explicit tag if provided and allowed.
+            cleaned = _clean_summary(resp.summary)
+            if not _is_usable(cleaned):
+                return None
+            tag_candidate = resp.tag if isinstance(resp.tag, str) else None
+            tag = tag_candidate if tag_candidate in ALLOWED_TAGS else "general"
+            return cleaned, tag, "model", model_name
         except Exception:
-            return None
-        # Clean and validate summary length/content.
-        cleaned = _clean_summary(resp.summary)
-        if not _is_usable(cleaned):
-            return None
-        # Determine tag – use validated tag if present and allowed, else fallback.
-        tag_candidate = resp.tag if isinstance(resp.tag, str) else None
-        if tag_candidate and tag_candidate in ALLOWED_TAGS:
-            tag = tag_candidate
-        else:
-            tag = "general"
-        return cleaned, tag, "model", model_name
+            # Non‑JSON or otherwise unparsable reply – treat raw as a plain
+            # summary. Apply cleaning and validation rules.
+            cleaned = _clean_summary(raw)
+            if not _is_usable(cleaned):
+                return None
+            # When the reply is plain text we have no explicit tag, so default
+            # to "general".
+            return cleaned, "general", "model", model_name
 
     # Primary model attempt.
     try:
@@ -275,8 +299,12 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     except Exception:
         pass
 
-    # Title‑based fallback – use truncated title as summary, tag "general".
-    summary = _clean_summary(title)
+    # Title‑based fallback – use the literal first 120 characters of the title
+    # as the summary (no ellipsis, no whole‑word truncation). This matches the
+    # clarified acceptance criteria that the fallback contract is a literal
+    # ``title[:120]`` when *both* model calls fail. The tag is forced to "general",
+    # the source is "fallback", and no model name is recorded.
+    summary = title[:120]
     return summary, "general", "fallback", None
 
 
