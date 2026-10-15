@@ -113,3 +113,30 @@ def test_prompt_identical_for_both_models(capture_prompts):
     assert len(capture_prompts) == 2
     primary_prompt, fallback_prompt = capture_prompts
     assert primary_prompt == fallback_prompt
+
+
+# ---------------------------------------------------------------------------
+# HUMAN-ASSISTED test maintenance (not OpenClaw Tester output).
+#
+# The two tests below were added by the human engineer with Claude Code after
+# independent mutation checks showed that the tests above did not catch (a) a
+# reworded contradictory instruction and (b) the article title appearing twice
+# in the prompt. They check Issue #27's criteria exactly as the ticket words
+# them. Nothing above this block was changed.
+# ---------------------------------------------------------------------------
+def test_prompt_has_no_prohibited_instruction_patterns(capture_prompts):
+    import re
+
+    summarize._summarize_with_fallback("Prohibited pattern check title")
+    primary_prompt = capture_prompts[0]
+    # Issue #27: the prompt must not match these patterns (case-insensitive).
+    for pattern in ("in your prompt", "include the word", "in the response"):
+        assert re.search(pattern, primary_prompt, re.IGNORECASE) is None, pattern
+
+
+def test_unique_title_appears_exactly_once_in_prompt(capture_prompts):
+    title = "Zxqv unique title 4271"
+    summarize._summarize_with_fallback(title)
+    primary_prompt = capture_prompts[0]
+    # Issue #27: exactly once in the whole prompt, not merely in the labelled line.
+    assert primary_prompt.count(title) == 1
