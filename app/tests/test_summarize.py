@@ -164,8 +164,10 @@ def test_max_limit_and_idempotent(monkeypatch, temporary_db):
     call_counter = {"count": 0}
 
     def fake_call(url, key, model, prompt):
+        # Count each model invocation and return a *valid* JSON response so the
+        # primary model succeeds on the first attempt for each article.
         call_counter["count"] += 1
-        return f"summary {model}"
+        return f"{{\"summary\": \"Title {model}\", \"tag\": \"research\"}}"
 
     monkeypatch.setattr(summarize, "_call_model", fake_call)
 
@@ -180,4 +182,94 @@ def test_max_limit_and_idempotent(monkeypatch, temporary_db):
     # Third run – all articles are summarized, so no further calls.
     summarize.summarize_pending()
     assert call_counter["count"] == 5
+
+# ---------------------------------------------------------------------------
+# Additional regression tests required by ticket #25 (Builder owned).
+# ---------------------------------------------------------------------------
+
+def test_plain_text_reply_triggers_fallback(monkeypatch, temporary_db):
+    """A plain‑text model reply is invalid JSON, so the fallback model is used."""
+    _, _ = temporary_db
+    insert_article("https://example.com/pt", "Plain text test title")
+
+    calls = []
+
+    def fake_call(url, key, model, prompt):
+        calls.append(model)
+        if model == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b"):
+            # Primary returns plain text (invalid JSON).
+            return "Just some plain text"
+        # Fallback returns a valid JSON response.
+        return "{\"summary\": \"Fallback summary valid\", \"tag\": \"tools\"}"
+
+    monkeypatch.setattr(summarize, "_call_model", fake_call)
+
+    summarize.summarize_pending()
+
+    # Verify the stored summary comes from the fallback model.
+    with db.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT summary, topic_tag, summary_source FROM articles")
+        summary, tag, source = cur.fetchone()
+        assert summary == "Fallback summary valid"
+        assert tag == "tools"
+        assert source == "model"
+    # Ensure both primary and fallback were attempted.
+    assert any(m == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b") for m in calls)
+    assert any(m == os.getenv("SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b") for m in calls)
+
+
+def test_blank_summary_is_rejected_and_fallback_used(monkeypatch, temporary_db):
+    """A JSON reply whose summary is blank is treated as invalid and falls back."""
+    _, _ = temporary_db
+    insert_article("https://example.com/blank", "Blank summary test title")
+
+    calls = []
+
+    def fake_call(url, key, model, prompt):
+        calls.append(model)
+        if model == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b"):
+            # Primary returns JSON with a blank summary (invalid per validator).
+            return "{\"summary\": \" \", \"tag\": \"research\"}"
+        # Fallback returns a good JSON.
+        return "{\"summary\": \"Valid fallback summary\", \"tag\": \"products\"}"
+
+    monkeypatch.setattr(summarize, "_call_model", fake_call)
+
+    summarize.summarize_pending()
+
+    with db.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT summary, topic_tag, summary_source FROM articles")
+        summary, tag, source = cur.fetchone()
+        assert summary == "Valid fallback summary"
+        assert tag == "products"
+        assert source == "model"
+    # Both models should have been called.
+    assert any(m == os.getenv("SUMMARY_PRIMARY_MODEL", "gpt-oss:20b") for m in calls)
+    assert any(m == os.getenv("SUMMARY_FALLBACK_MODEL", "nemotron-3-nano:30b") for m in calls)
+
+
+def test_both_models_invalid_uses_title_fallback(monkeypatch, temporary_db):
+    """When both primary and fallback replies are invalid, the title fallback is used."""
+    _, _ = temporary_db
+    title = "Title that will be truncated because both models fail and we need the literal fallback"
+    insert_article("https://example.com/both", title)
+
+    def always_invalid(url, key, model, prompt):
+        # Primary and fallback both return plain text (invalid JSON).
+        return "plain text invalid"
+
+    monkeypatch.setattr(summarize, "_call_model", always_invalid)
+
+    summarize.summarize_pending()
+
+    with db.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT summary, topic_tag, summary_source, summary_model FROM articles")
+        summary, tag, source, model = cur.fetchone()
+        assert summary == title[:120]
+        assert tag == "general"
+        assert source == "fallback"
+        assert model is None
 

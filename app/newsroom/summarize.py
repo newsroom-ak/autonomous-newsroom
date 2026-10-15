@@ -81,6 +81,12 @@ class SummaryResponse(BaseModel):
 def _validate_response(raw: str) -> SummaryResponse:
     """Extract JSON from ``raw`` (optionally wrapped in a Markdown fence) and
     validate it against :class:`SummaryResponse`.
+
+    The ticket requires *strict* JSON parsing: any raw newline characters
+    inside the JSON (including within a JSON string) must cause a parsing
+    failure, which then triggers the fallback model. Therefore we **do not**
+    replace newlines with spaces – we keep the raw text untouched after
+    stripping optional Markdown fences.
     """
     # Strip surrounding whitespace first.
     raw = raw.strip()
@@ -89,16 +95,13 @@ def _validate_response(raw: str) -> SummaryResponse:
         # Split first line to detect possible language specifier.
         parts = raw.split("\n", 1)
         if len(parts) == 2:
-            # Remove the opening fence line and the trailing fence.
+            # Remove the opening fence line.
             raw = parts[1]
         # Remove trailing fence if present.
         if raw.endswith("```"):
             raw = raw[: -3]
-    # The remaining string should be JSON. Some tests (and potentially real
-    # model outputs) include literal newline characters inside the summary
-    # string, which are not valid JSON. Replace newline characters with a
-    # space to make the JSON parsable while preserving the intended whitespace.
-    raw = raw.replace("\n", " ")
+    # Do **not** manipulate newline characters; let the JSON parser raise
+    # on any malformed content.
     return SummaryResponse.model_validate_json(raw)
 
 # ---------------------------------------------------------------------------
@@ -243,33 +246,23 @@ def _summarize_with_fallback(title: str) -> Tuple[str, str, str, str | None]:
     def _process_reply(raw: str, model_name: str) -> tuple[str, str, str, str] | None:
         """Process a raw model reply.
 
-        The ticket defines two valid reply formats:
-        1. A JSON object matching :class:`SummaryResponse`.
-        2. Any plain‑text string (used by some legacy tests). If the reply is not
-           valid JSON we fall back to treating the raw string as the summary
-           itself.
-
-        The function returns ``None`` when the reply cannot produce a usable
-        summary, signalling the caller to try the fallback model.
+        Only a **valid JSON** response matching :class:`SummaryResponse` is
+        accepted. Any parsing error, validation failure, or missing usable
+        summary results in ``None`` so the caller will try the fallback model.
         """
         try:
             resp = _validate_response(raw)
-            # JSON path – use explicit tag if provided and allowed.
-            cleaned = _clean_summary(resp.summary)
-            if not _is_usable(cleaned):
-                return None
-            tag_candidate = resp.tag if isinstance(resp.tag, str) else None
-            tag = tag_candidate if tag_candidate in ALLOWED_TAGS else "general"
-            return cleaned, tag, "model", model_name
         except Exception:
-            # Non‑JSON or otherwise unparsable reply – treat raw as a plain
-            # summary. Apply cleaning and validation rules.
-            cleaned = _clean_summary(raw)
-            if not _is_usable(cleaned):
-                return None
-            # When the reply is plain text we have no explicit tag, so default
-            # to "general".
-            return cleaned, "general", "model", model_name
+            # Invalid JSON – trigger fallback.
+            return None
+
+        # JSON path – use explicit tag if provided and allowed.
+        cleaned = _clean_summary(resp.summary)
+        if not _is_usable(cleaned):
+            return None
+        tag_candidate = resp.tag if isinstance(resp.tag, str) else None
+        tag = tag_candidate if tag_candidate in ALLOWED_TAGS else "general"
+        return cleaned, tag, "model", model_name
 
     # Primary model attempt.
     try:
