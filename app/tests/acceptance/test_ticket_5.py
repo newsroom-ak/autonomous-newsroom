@@ -104,10 +104,10 @@ def test_primary_model_called_and_summary_populated(monkeypatch):
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
 
-        # Ensure env vars have known values.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "test-primary-model"
-        os.environ["SUMMARY_PRIMARY_KEY"] = "primary-key"
+        # Ensure env vars have known values using monkeypatch so they are restored.
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "test-primary-model")
+        monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "primary-key")
 
         refresh._run_refresh()
 
@@ -167,13 +167,13 @@ def test_fallback_on_primary_402(monkeypatch):
 
                 return Resp()
 
-        # Patch env to have distinguishable URLs.
-        os.environ["SUMMARY_PRIMARY_URL"] = "https://primary.test/v1"
-        os.environ["SUMMARY_FALLBACK_URL"] = "https://fallback.test/v1"
-        os.environ["SUMMARY_PRIMARY_MODEL"] = "primary-model"
-        os.environ["SUMMARY_FALLBACK_MODEL"] = "fallback-model"
-        os.environ["SUMMARY_PRIMARY_KEY"] = "primary-key"
-        os.environ["SUMMARY_FALLBACK_KEY"] = "fallback-key"
+        # Patch env to have distinguishable URLs using monkeypatch.
+        monkeypatch.setenv("SUMMARY_PRIMARY_URL", "https://primary.test/v1")
+        monkeypatch.setenv("SUMMARY_FALLBACK_URL", "https://fallback.test/v1")
+        monkeypatch.setenv("SUMMARY_PRIMARY_MODEL", "primary-model")
+        monkeypatch.setenv("SUMMARY_FALLBACK_MODEL", "fallback-model")
+        monkeypatch.setenv("SUMMARY_PRIMARY_KEY", "primary-key")
+        monkeypatch.setenv("SUMMARY_FALLBACK_KEY", "fallback-key")
 
         monkeypatch.setattr(summarize, "httpx", __import__("httpx"))
         monkeypatch.setattr(summarize.httpx, "post", fake_post)
@@ -241,7 +241,8 @@ def test_idempotent_summarisation(monkeypatch):
                     pass
 
                 def json(self):
-                    return {"choices": [{"message": {"content": "First summary"}}]}
+                    # Return a JSON‑structured reply containing a simple summary.
+                    return {"choices": [{"message": {"content": "{\"summary\": \"First summary\", \"tag\": \"general\"}"}}]}
 
             return Resp()
 

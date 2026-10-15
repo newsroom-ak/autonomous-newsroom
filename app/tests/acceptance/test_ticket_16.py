@@ -279,7 +279,8 @@ def test_model_payload_uses_max_tokens_800(monkeypatch):
                 def raise_for_status(self):
                     pass
                 def json(self):
-                    return {"choices": [{"message": {"content": "OK"}}]}
+                    # Return a minimal valid JSON payload containing a summary.
+                    return {"choices": [{"message": {"content": "{\"summary\": \"OK\", \"tag\": \"general\"}"}}]}
             return Resp()
 
         # Use primary model only for this test.
